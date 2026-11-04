@@ -1,5 +1,7 @@
 # Shielded Shopping Agent
 
+[![ci](https://github.com/Vishal4742/shielded-shopping-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Vishal4742/shielded-shopping-agent/actions/workflows/ci.yml)
+
 A Telegram bot, written in Rust, that tops up Indian phones (Jio, Airtel, Vi) for you on a schedule. You approve a rule once, for example `/auto jio 9876543210 10 weekly`, and the agent then buys real top-ups through Bitrefill while you sleep. Your budget is shielded Zcash testnet funds. Every run passes the same limits in code, and every purchase leaves a shielded receipt memo that only your viewing key can read.
 
 Built for the Free Society Hackathon, Mumbai, 4–5 Nov 2026. Entered in both the **Privacy (Zcash)** and **Agentic Commerce (Bitrefill)** tracks. Try it: [@zcashdemo_bot](https://t.me/zcashdemo_bot) (invite only).
