@@ -21,8 +21,6 @@ pub enum Intent {
 pub enum IntentError {
     #[error("invalid Claude response: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("Claude response has no valid intent")]
-    Invalid,
 }
 
 pub fn parse_regex(text: &str) -> Intent {
@@ -33,7 +31,7 @@ pub fn parse_regex(text: &str) -> Intent {
         .collect();
     let operator = words.iter().find_map(|word| Operator::parse(word));
     let Some(operator) = operator else {
-        if words.iter().any(|w| *w == "balance") {
+        if words.contains(&"balance") {
             return Intent::Balance;
         }
         if words.iter().any(|w| *w == "help" || *w == "start") {

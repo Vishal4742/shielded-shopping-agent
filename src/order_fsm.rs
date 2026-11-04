@@ -14,6 +14,9 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Confirm` happens inside db::confirm_order's single SQL transaction and `RetryReceipt` is a
+// self-loop the receipt queue never needs to write; both stay so the edge table matches design §2.
+#[allow(dead_code)]
 pub enum Event {
     Cancel,
     Expire,
@@ -85,7 +88,9 @@ pub fn parse(s: &str) -> Result<Status, TransitionError> {
     }
 }
 
-/// SRS BR-5: statuses whose price counts toward the daily caps.
+/// SRS BR-5: statuses whose price counts toward the daily caps. `db::spent_today_inr` holds
+/// the same list in SQL; the test below pins it.
+#[cfg(test)]
 pub fn counts_toward_cap(s: Status) -> bool {
     matches!(
         s,
@@ -97,6 +102,7 @@ pub fn counts_toward_cap(s: Status) -> bool {
     )
 }
 
+#[cfg(test)]
 pub fn is_terminal(s: Status) -> bool {
     matches!(
         s,

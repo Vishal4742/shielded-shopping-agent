@@ -193,6 +193,7 @@ impl Db {
     }
 
     /// In-memory DB for tests. Does not migrate.
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Db> {
         Self::configure(Connection::open_in_memory()?)
     }

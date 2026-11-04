@@ -27,10 +27,6 @@ pub const ZEC_ASSET: &str = "nep141:zec.omft.near";
 pub const BTC_ASSET: &str = "nep141:btc.omft.near";
 const CACHE_SECS: i64 = 60;
 
-pub fn parse_zec_usd_cents(json: &str) -> Result<i64, PriceError> {
-    parse_usd_cents(json, ZEC_ASSET)
-}
-
 pub fn parse_usd_cents(json: &str, asset_id: &str) -> Result<i64, PriceError> {
     let tokens: Vec<Token<'_>> = serde_json::from_str(json)?;
     let raw = tokens
@@ -104,10 +100,11 @@ impl PriceCache {
 
     pub async fn prices(&self, now: i64) -> Result<Prices, PriceError> {
         let mut cached = self.cached.lock().await;
-        if let Some(p) = *cached {
-            if now >= p.fetched_at && now - p.fetched_at < CACHE_SECS {
-                return Ok(p);
-            }
+        if let Some(p) = *cached
+            && now >= p.fetched_at
+            && now - p.fetched_at < CACHE_SECS
+        {
+            return Ok(p);
         }
         let body = self
             .client
@@ -134,7 +131,7 @@ mod tests {
     #[test]
     fn parses_live_fixture_price_as_cents() {
         let fixture = include_str!("../fixtures/price/tokens.json");
-        assert_eq!(parse_zec_usd_cents(fixture).unwrap(), 128_777);
+        assert_eq!(parse_usd_cents(fixture, ZEC_ASSET).unwrap(), 128_777);
         assert_eq!(parse_usd_cents(fixture, BTC_ASSET).unwrap(), 7_834_400);
     }
 

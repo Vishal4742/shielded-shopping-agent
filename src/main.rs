@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-const BITREFILL_BASE: &str = "https://api.bitrefill.com/v2";
 const RESOLVE_EVERY: Duration = Duration::from_secs(30);
 
 fn env_or(key: &str, default: &str) -> String {
@@ -84,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
         env_or("SSA_TOR", "0") == "1",
     ));
     let bitrefill = bitrefill::Bitrefill::new(
-        BITREFILL_BASE,
+        bitrefill::DEFAULT_BASE,
         cfg.bitrefill_api_key.clone(),
         cfg.bitrefill_dry_run,
     )?;

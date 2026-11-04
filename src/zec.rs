@@ -108,16 +108,6 @@ impl Zec {
         }
     }
 
-    /// Sync all accounts. Waits for the lock.
-    pub async fn sync(&self) -> Result<(), ZecError> {
-        let guard = self.lock.lock().await;
-        let args: Vec<&str> = ["sync"]
-            .into_iter()
-            .chain(self.network_args().iter().copied())
-            .collect();
-        self.run(&guard, &args).await.map(|_| ())
-    }
-
     /// Sync worker variant: skip this round (`Ok(false)`) if another call holds the wallet.
     pub async fn try_sync(&self) -> Result<bool, ZecError> {
         let Ok(guard) = self.lock.try_lock() else {
@@ -128,15 +118,6 @@ impl Zec {
             .chain(self.network_args().iter().copied())
             .collect();
         self.run(&guard, &args).await.map(|_| true)
-    }
-
-    pub async fn balance(&self, account_uuid: &str) -> Result<Balance, ZecError> {
-        let guard = self.lock.lock().await;
-        Ok(parse_balance(
-            &self
-                .run(&guard, &["balance", "--json", account_uuid])
-                .await?,
-        )?)
     }
 
     pub async fn list_tx(&self, account_uuid: &str) -> Result<Vec<Tx>, ZecError> {
@@ -243,7 +224,6 @@ const TXID_HEX_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
-    BadJson(String),
     MissingField(&'static str),
     BadAmount(String),
     NoTxid,
@@ -252,7 +232,6 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadJson(e) => write!(f, "devtool JSON: {e}"),
             Self::MissingField(k) => write!(f, "devtool output missing {k}"),
             Self::BadAmount(s) => write!(f, "devtool amount not parseable: {s:?}"),
             Self::NoTxid => write!(f, "devtool send printed no txid"),
@@ -261,38 +240,6 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
-
-/// `balance --json <uuid>`. Spendable counts the shielded pools only; transparent funds
-/// are never spent by the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Balance {
-    pub tip_height: i64,
-    pub spendable_zat: i64,
-    pub total_zat: i64,
-}
-
-pub fn parse_balance(json: &str) -> Result<Balance, ParseError> {
-    let v: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| ParseError::BadJson(e.to_string()))?;
-    let field = |k: &'static str| {
-        v.get(k)
-            .and_then(|x| x.as_i64())
-            .ok_or(ParseError::MissingField(k))
-    };
-    let spendable = [
-        "ironwood_spendable",
-        "orchard_spendable",
-        "sapling_spendable",
-    ]
-    .into_iter()
-    .map(field)
-    .sum::<Result<i64, _>>()?;
-    Ok(Balance {
-        tip_height: field("chain_tip_height")?,
-        spendable_zat: spendable,
-        total_zat: field("total")?,
-    })
-}
 
 /// `send` prints the proposal, then `Sending transaction...`, then the txid as the last line.
 pub fn parse_send_txid(stdout: &str) -> Result<String, ParseError> {
@@ -499,7 +446,7 @@ mod tests {
             "/tmp/id".into(),
             false,
         );
-        assert!(matches!(zec.balance("x").await, Err(ZecError::Spawn(_))));
+        assert!(matches!(zec.list_tx("x").await, Err(ZecError::Spawn(_))));
     }
 
     #[test]
@@ -509,40 +456,7 @@ mod tests {
         assert_eq!(parse_list_tx("Transactions:\n").unwrap(), vec![]);
     }
 
-    const BALANCE_UNCONFIRMED: &str = include_str!("../fixtures/devtool/balance-unconfirmed.json");
     const SEND_OK: &str = include_str!("../fixtures/devtool/send-ok.txt");
-
-    #[test]
-    fn balance_with_unconfirmed_receipt_has_zero_spendable() {
-        let b = parse_balance(BALANCE_UNCONFIRMED).unwrap();
-        assert_eq!(
-            b,
-            Balance {
-                tip_height: 4_557_296,
-                spendable_zat: 0,
-                total_zat: 100_000_000
-            }
-        );
-    }
-
-    #[test]
-    fn balance_sums_shielded_pools_and_ignores_transparent() {
-        let json = r#"{"chain_tip_height":1,"ironwood_spendable":5,"orchard_spendable":7,
-            "sapling_spendable":11,"total":999,"transparent_spendable":1000}"#;
-        assert_eq!(parse_balance(json).unwrap().spendable_zat, 23);
-    }
-
-    #[test]
-    fn balance_rejects_missing_field_and_garbage() {
-        assert_eq!(
-            parse_balance(r#"{"total":1}"#),
-            Err(ParseError::MissingField("ironwood_spendable"))
-        );
-        assert!(matches!(
-            parse_balance("Error: More than one account"),
-            Err(ParseError::BadJson(_))
-        ));
-    }
 
     #[test]
     fn send_txid_is_last_line_of_real_output() {
