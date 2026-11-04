@@ -289,6 +289,9 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
   .foot-grid { grid-template-columns: minmax(0, 1fr); }
   .wordmark { font-size: 72px; }
   .nav { gap: 12px; }
+}
+@media (max-width: 400px) {
+  .xs-hide { display: none; }
   .seg button { padding: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
