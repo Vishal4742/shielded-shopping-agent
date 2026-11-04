@@ -271,9 +271,9 @@ function startCopy() {
 
 /* ---------- live stats (FR-16): GET {STATS_URL}/stats.json every 10 s while visible ---------- */
 const STATS_POLL_MS = 10_000;
-const STATS_STALE_S = 60;
 const GLOBAL_CAP_INR = 200; // BR-3
-const STATS_KEYS = ["delivered_today", "inr_today", "inr_cap_today", "receipts_total", "paused", "as_of"];
+// The server's shape (src/workers.rs stats_server). It sends no timestamp, so a 200 counts as live.
+const STATS_KEYS = ["orders_delivered", "inr_spent_today", "receipts_sent"];
 
 function startStats() {
   const panel = $("#stats");
@@ -289,29 +289,22 @@ function startStats() {
   };
   if (!base) { offline(); return; }
 
-  // ponytail: also accepts zcash-3f's proposed shape (no as_of, no cap) until one contract wins; drop the branch then
-  const normalize = (j) => (j && !("delivered_today" in j) && "orders_delivered" in j
-    ? { delivered_today: j.orders_delivered, inr_today: j.inr_spent_today, inr_cap_today: GLOBAL_CAP_INR,
-        receipts_total: j.receipts_sent, paused: j.paused, as_of: Math.floor(Date.now() / 1000) }
-    : j);
-  const valid = (j) => j && STATS_KEYS.every((k) => k in j)
-    && ["delivered_today", "inr_today", "inr_cap_today", "receipts_total", "as_of"].every((k) => Number.isInteger(j[k]) && j[k] >= 0)
+  const valid = (j) => j && STATS_KEYS.every((k) => Number.isInteger(j[k]) && j[k] >= 0)
     && typeof j.paused === "boolean";
   const render = (j) => {
-    const age = Math.max(0, Math.round(Date.now() / 1000 - j.as_of));
-    if (age > STATS_STALE_S) { offline(); return; }
-    const capped = j.inr_today >= j.inr_cap_today;
+    const capped = j.inr_spent_today >= GLOBAL_CAP_INR;
     panel.dataset.state = capped ? "capped" : "live";
-    $("#s-delivered").textContent = j.delivered_today;
-    $("#s-inr").textContent = `₹${j.inr_today}`;
-    $("#s-receipts").textContent = j.receipts_total;
-    $("#s-bar").style.transform = `scaleX(${clamp01(j.inr_today / j.inr_cap_today).toFixed(3)})`;
+    $("#s-delivered").textContent = j.orders_delivered;
+    $("#s-inr").textContent = `₹${j.inr_spent_today}`;
+    $("#s-receipts").textContent = j.receipts_sent;
+    $("#s-bar").style.transform = `scaleX(${clamp01(j.inr_spent_today / GLOBAL_CAP_INR).toFixed(3)})`;
     pill.hidden = !j.paused;
-    cap.textContent = capped ? "Today's demo budget is used up · Zcash testnet" : `updated ${age} s ago · Zcash testnet`;
+    cap.textContent = capped ? "Today's demo budget is used up · Zcash testnet"
+      : `live · checked ${new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · Zcash testnet`;
   };
   const poll = () => fetch(`${base}/stats.json`, { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((raw) => { const j = normalize(raw); return valid(j) ? render(j) : offline(); })
+    .then((j) => (valid(j) ? render(j) : offline()))
     .catch(offline);
   let timer = 0;
   const run = () => { clearInterval(timer); if (!document.hidden) { poll(); timer = setInterval(poll, STATS_POLL_MS); } };
