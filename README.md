@@ -207,3 +207,4 @@ Hackathon rule: project source code was written on 4 Nov 2026, after the 11:00 I
 - [zcash-devtool](https://github.com/zcash/zcash-devtool): the wallet, run as a subprocess.
 - [Bitrefill](https://www.bitrefill.com): the top-up API.
 - [NEAR Intents 1Click](https://docs.near-intents.org): prices and the ZEC refill swap.
+- [ascii-diorama](https://github.com/JDhruv14/ascii-diorama) by JDhruv14 (MIT) and [three.js](https://threejs.org): the landing page hero.
