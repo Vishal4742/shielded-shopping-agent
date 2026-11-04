@@ -360,7 +360,13 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
                     // Past QUOTED the budget was debited and an invoice may exist, so
                     // "nothing was bought" could be false. Say we're checking instead.
                     match app.db.get_order(order_id) {
-                        Ok(Some(order)) if order.status != "QUOTED" => {
+                        Ok(Some(order))
+                            if order.tg_id == tg_id
+                                && matches!(
+                                    order.status.as_str(),
+                                    "PURCHASING" | "UNCERTAIN" | "DELIVERED"
+                                ) =>
+                        {
                             buy_text(&BuyOutcome::Uncertain(order), now)
                         }
                         _ => MSG_ERROR.to_owned(),
