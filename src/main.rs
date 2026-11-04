@@ -1,5 +1,6 @@
 //! Shielded Shopping Agent. `ssa` runs the bot; `ssa invite <CODE> <USES>` adds an invite code.
 
+mod audit;
 mod autopay;
 mod bitrefill;
 mod caps;
@@ -48,6 +49,22 @@ async fn main() -> anyhow::Result<()> {
     db.migrate()?;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [cmd, birthday] = args.as_slice() {
+        anyhow::ensure!(
+            cmd == "audit",
+            "usage: ssa audit <BIRTHDAY_HEIGHT> (key in SSA_AUDIT_UFVK)"
+        );
+        let ufvk =
+            std::env::var("SSA_AUDIT_UFVK").context("set SSA_AUDIT_UFVK to the viewing key")?;
+        let lines = audit::audit(
+            &cfg.devtool,
+            &ufvk,
+            birthday.parse().context("birthday height")?,
+        )
+        .await?;
+        print!("{}", audit::to_csv(&lines));
+        return Ok(());
+    }
     if let [cmd, code, uses] = args.as_slice() {
         anyhow::ensure!(cmd == "invite", "usage: ssa [invite <CODE> <USES>]");
         db.add_invite(code, uses.parse().context("USES must be a number")?)?;

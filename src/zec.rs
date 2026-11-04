@@ -32,6 +32,8 @@ pub struct Account {
     pub uuid: String,
     pub name: String,
     pub ufvk: String,
+    /// Wallet birthday height: a watch-only rebuild only needs to scan from here.
+    pub birthday: Option<i64>,
 }
 
 impl fmt::Debug for Account {
@@ -171,6 +173,13 @@ impl Zec {
         Ok(parse_send_txid(&self.run(&guard, &args).await?)?)
     }
 
+    /// One account's details (UFVK, birthday) from `list-accounts`. Never log the result's key.
+    pub async fn account(&self, uuid: &str) -> Result<Option<Account>, ZecError> {
+        let guard = self.lock.lock().await;
+        let text = self.run(&guard, &["list-accounts"]).await?;
+        Ok(parse_accounts(&text).into_iter().find(|a| a.uuid == uuid))
+    }
+
     /// New ZIP-32 account named `name`; returns it with its default unified address.
     pub async fn create_account(&self, name: &str) -> Result<(Account, String), ZecError> {
         let guard = self.lock.lock().await;
@@ -199,10 +208,14 @@ pub fn parse_accounts(text: &str) -> Vec<Account> {
                 .next()
                 .unwrap_or_default()
                 .to_owned();
+            let birthday = rest
+                .split_once("(birthday height ")
+                .and_then(|(_, h)| h.trim_end_matches(')').trim().parse().ok());
             accounts.push(Account {
                 uuid,
                 name: String::new(),
                 ufvk: String::new(),
+                birthday,
             });
         } else if let Some(acc) = accounts.last_mut() {
             if let Some(n) = t.strip_prefix("Name:") {
@@ -466,6 +479,7 @@ mod tests {
         assert_eq!(accts[1].uuid, "d87ee4a6-ea65-4258-b903-713b7ba04ede");
         assert_eq!(accts[1].name, "user-test");
         assert_eq!(accts[1].ufvk, "uviewtest1fakeufvk1");
+        assert_eq!(accts[1].birthday, Some(4_557_153));
         assert!(!format!("{:?}", accts[1]).contains("fakeufvk"));
     }
 

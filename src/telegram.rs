@@ -13,6 +13,7 @@ use teloxide::types::{
     MessageId,
 };
 
+use crate::audit;
 use crate::autopay;
 use crate::caps::{self, Decision};
 use crate::db::{Order, Rule};
@@ -43,6 +44,9 @@ const MSG_UNCERTAIN: &str =
     "I'm checking this order with Bitrefill. Nothing to do on your side; I'll message you.";
 const MSG_DRY_RUN: &str = "Dry run: nothing was bought and your budget is restored.";
 const MSG_AUTO_HINT: &str = "Set a recurring top-up like this:\n/auto jio 9876543210 10 weekly\nSchedules: daily, weekly, monthly, or every 2m / every 3 hours.";
+const MSG_REPORT_WORKING: &str = "Building your report from your viewing key alone (a fresh watch-only wallet). This takes about 30 s…";
+const MSG_ERROR_REPORT: &str =
+    "I couldn't build the report right now. Nothing was changed; try again in a minute.";
 const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 10\n(operator, phone number, rupees). /help for more.";
 const MSG_VIEWKEY_HELP: &str = "Read-only: it shows your deposits and receipts, nothing can be spent with it. Import it as a watch-only account in Zingo or zcash-devtool.";
 
@@ -128,6 +132,7 @@ async fn handle_message(
         Some(("viewkey", _)) => cmd_viewkey(bot, app, chat, tg_id).await,
         Some(("auto", _)) => cmd_auto(bot, app, chat, tg_id, command_args(text), now).await,
         Some(("rules", _)) => cmd_rules(bot, app, chat, tg_id).await,
+        Some(("report", _)) => cmd_report(bot, app, chat, tg_id).await,
         Some(("stop", arg)) => cmd_stop(bot, app, chat, tg_id, arg).await,
         Some(_) => send(bot, chat, MSG_HINT.to_owned()).await,
         None => handle_text(bot, app, http, chat, tg_id, text, now).await,
@@ -359,6 +364,46 @@ async fn finish_card(bot: &Bot, app: &App, chat: ChatId, card: MessageId, text: 
         let text = redact(&e.to_string(), &app.cfg.telegram_bot_token);
         tracing::warn!(error = %text, "could not deliver final order message");
     }
+}
+
+// ---------------------------------------------------------------- audit report
+
+/// `/report`: rebuilds a throwaway watch-only wallet from the user's viewing key ALONE and lists
+/// the purchases its receipt memos prove. Same thing an auditor would get from `ssa audit`.
+async fn cmd_report(bot: &Bot, app: &App, chat: ChatId, tg_id: i64) -> anyhow::Result<()> {
+    let Some(user) = app.db.get_user(tg_id)? else {
+        return send(bot, chat, MSG_NOT_ALLOWED.to_owned()).await;
+    };
+    let Some(uuid) = user.account_uuid else {
+        return send(bot, chat, MSG_NO_WALLET.to_owned()).await;
+    };
+    let Some(account) = app.zec.account(&uuid).await? else {
+        return send(bot, chat, MSG_ERROR_REPORT.to_owned()).await;
+    };
+    let birthday = account.birthday.unwrap_or(0);
+    send(bot, chat, MSG_REPORT_WORKING.to_owned()).await?;
+    let lines = match audit::audit(&app.cfg.devtool, &account.ufvk, birthday).await {
+        Ok(lines) => lines,
+        Err(e) => {
+            log_error(app, "audit failed", &e);
+            return send(bot, chat, MSG_ERROR_REPORT.to_owned()).await;
+        }
+    };
+    let summary = report_summary(&lines);
+    let csv = InputFile::memory(audit::to_csv(&lines).into_bytes()).file_name("ssa-receipts.csv");
+    bot.send_document(chat, csv).caption(summary).await?;
+    Ok(())
+}
+
+fn report_summary(lines: &[audit::AuditLine]) -> String {
+    if lines.is_empty() {
+        return "Viewing-key report: no purchase receipts found yet.".to_owned();
+    }
+    let total_inr: i64 = lines.iter().map(|l| l.inr).sum();
+    format!(
+        "Viewing-key report: {} purchase receipt(s), ₹{total_inr} in total.\nBuilt only from your read-only viewing key, the same view an auditor gets. It can't spend and sees nothing outside your account.",
+        lines.len()
+    )
 }
 
 // ---------------------------------------------------------------- auto-pay
@@ -642,7 +687,8 @@ fn help_text() -> String {
          Limits: ₹{min}–₹{max} per order, ₹{day} per day\n\n\
          I show a price first; nothing is bought until you tap ✅ Buy.\n\n\
          /balance: your budget and deposit address\n\
-         /viewkey: your read-only viewing key\n\n\
+         /viewkey: your read-only viewing key\n\
+         /report: your purchases, proven from the viewing key alone\n\n\
          Auto-pay (I buy on schedule, within your limits):\n\
          /auto jio 9876543210 10 weekly\n\
          /rules: your rules · /stop <n>: end one",
