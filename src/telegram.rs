@@ -192,7 +192,7 @@ async fn send_deposit_address(bot: &Bot, chat: ChatId, ua: &str) -> anyhow::Resu
     send(bot, chat, welcome_text(ua)).await?;
     // The address is already delivered; a QR failure must not look like a failed signup.
     if let Err(e) = send_qr(bot, chat, ua).await {
-        tracing::warn!(error = %e, "deposit QR not sent");
+        tracing::warn!(error = %redact(&e.to_string(), bot.token()), "deposit QR not sent");
     }
     Ok(())
 }
@@ -296,7 +296,7 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     let now = chrono::Utc::now().timestamp();
     // Always answer first so the button stops spinning, even if we then ignore the tap.
     if let Err(e) = bot.answer_callback_query(q.id.clone()).await {
-        tracing::warn!(error = %e, "answer_callback_query failed");
+        tracing::warn!(error = %redact(&e.to_string(), bot.token()), "answer_callback_query failed");
     }
     let Some((action, order_id)) = q.data.as_deref().and_then(parse_callback) else {
         return Ok(());
@@ -327,7 +327,7 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
         Action::Buy => {
             // Dropping the buttons first makes a second tap moot; `orders` guards it too.
             if let Err(e) = edit_card(bot, chat, card_id, MSG_BUYING).await {
-                tracing::warn!(error = %e, "could not show Buying…");
+                tracing::warn!(error = %redact(&e.to_string(), bot.token()), "could not show Buying…");
             }
             let text = match orders::confirm_and_buy(app, order_id, tg_id, now).await {
                 Ok(outcome) => buy_text(&outcome, now),

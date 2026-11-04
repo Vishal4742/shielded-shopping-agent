@@ -123,7 +123,7 @@ pub fn skip_keyboard(rule_id: i64) -> InlineKeyboardMarkup {
 pub async fn run_loop(app: Arc<App>, bot: Bot) {
     loop {
         if let Err(e) = tick(&app, &bot).await {
-            tracing::warn!(error = %e, "autopay tick failed");
+            tracing::warn!(error = %e.to_string().replace(bot.token(), "<token>"), "autopay tick failed");
         }
         tokio::time::sleep(TICK).await;
     }
@@ -151,10 +151,12 @@ async fn tick(app: &App, bot: &Bot) -> anyhow::Result<()> {
 async fn run_rule(app: &App, bot: &Bot, rule: &Rule, now: i64) -> anyhow::Result<()> {
     let next = next_slot(rule.next_run_at, rule.every_secs, now);
     // Claim the slot first: if this conditional update fails, another tick already ran it.
-    if !app.db.advance_rule(rule.id, rule.next_run_at, next, None)? {
+    // Atomic claim: re-checks active/approved and reads the CURRENT skip flag, so a Skip or
+    // Stop that lands after the scheduler read the rule still wins.
+    let Some(skip) = app.db.claim_rule_slot(rule.id, rule.next_run_at, next)? else {
         return Ok(());
-    }
-    if rule.skip_next {
+    };
+    if skip {
         notify(
             bot,
             rule.tg_id,

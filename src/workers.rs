@@ -317,6 +317,8 @@ async fn serve_connection(app: Arc<App>, stream: TcpStream) -> std::io::Result<(
 
 /// Serves `GET /stats.json` on `addr` until the process exits. A bind failure is logged and ends
 /// only this task.
+const MAX_STATS_CONNECTIONS: usize = 32;
+
 pub async fn stats_server(app: Arc<App>, addr: SocketAddr) {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -326,6 +328,8 @@ pub async fn stats_server(app: Arc<App>, addr: SocketAddr) {
         }
     };
     tracing::info!(%addr, "stats server listening");
+    // It's public via the tunnel: bound concurrent connections; excess ones are dropped.
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_STATS_CONNECTIONS));
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -335,8 +339,13 @@ pub async fn stats_server(app: Arc<App>, addr: SocketAddr) {
                 continue;
             }
         };
+        let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let app = Arc::clone(&app);
         tokio::spawn(async move {
+            let _permit = permit;
             match tokio::time::timeout(HTTP_IO_TIMEOUT, serve_connection(app, stream)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::debug!(error = %e, "stats connection error"),

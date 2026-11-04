@@ -228,14 +228,26 @@ pub async fn confirm_and_buy(
         .ok_or_else(|| anyhow::anyhow!("order has unknown operator"))?;
     {
         let _guard = BUY_LOCK.lock().await;
-        let decision = caps_for(&app.db, tg_id, operator, order.inr, now)?;
-        if decision != caps::Decision::Allow {
-            return Ok(BuyOutcome::Refused(decision));
-        }
-        match app
-            .db
-            .confirm_order(order_id, tg_id, order.total_zat(), now)?
-        {
+        let inr = order.inr;
+        let check = |s: crate::db::Spend| {
+            caps::check(
+                operator,
+                inr,
+                s.user_inr,
+                s.global_inr,
+                s.last_purchase_at,
+                now,
+            )
+        };
+        match app.db.confirm_order_checked(
+            order_id,
+            tg_id,
+            order.total_zat(),
+            now,
+            ist_day(now),
+            check,
+        )? {
+            ConfirmOutcome::Refused(decision) => return Ok(BuyOutcome::Refused(decision)),
             ConfirmOutcome::Confirmed => {}
             ConfirmOutcome::NotOwner => return Ok(BuyOutcome::NotOwner),
             ConfirmOutcome::NotQuoted => return Ok(BuyOutcome::NotQuoted),
@@ -322,7 +334,16 @@ async fn purchase(app: &App, order: Order) -> anyhow::Result<BuyOutcome> {
     mark_uncertain(app, &order, "not delivered within 15 s; still checking")
 }
 
+/// External error text (Bitrefill bodies) may echo the request; never store or log the phone.
+fn scrub_phone(text: &str, phone: &str) -> String {
+    if phone.is_empty() {
+        return text.to_owned();
+    }
+    text.replace(phone, "<phone>")
+}
+
 async fn fail_and_refund(app: &App, order: &Order, why: &str) -> anyhow::Result<BuyOutcome> {
+    let why = &scrub_phone(why, &order.phone);
     let now = now_ts();
     app.db.set_error(&order.id, why, now)?;
     advance(&app.db, order, Event::Fail, now)?;
@@ -331,6 +352,7 @@ async fn fail_and_refund(app: &App, order: &Order, why: &str) -> anyhow::Result<
 }
 
 fn mark_uncertain(app: &App, order: &Order, why: &str) -> anyhow::Result<BuyOutcome> {
+    let why = &scrub_phone(why, &order.phone);
     let now = now_ts();
     app.db.set_error(&order.id, why, now)?;
     advance(&app.db, order, Event::MarkUncertain, now)?;

@@ -140,6 +140,8 @@ pub enum ConfirmOutcome {
     Expired,
     /// Ledger balance is below `total_zat`.
     InsufficientFunds,
+    /// The caps check (run inside the transaction) refused it.
+    Refused(crate::caps::Decision),
 }
 
 const ORDER_COLS: &str = "id, tg_id, operator, product_slug, phone, inr, usd_cents, price_zat, \
@@ -166,6 +168,32 @@ fn order_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Order> {
         created_at: r.get(15)?,
         updated_at: r.get(16)?,
     })
+}
+
+/// Spend inputs for `caps::check`, read inside the confirm transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spend {
+    pub user_inr: i64,
+    pub global_inr: i64,
+    pub last_purchase_at: Option<i64>,
+}
+
+fn spent(conn: &Connection, tg_id: Option<i64>, start: i64, end: i64) -> rusqlite::Result<i64> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(o.inr), 0) FROM orders o \
+         JOIN ledger l ON l.order_id = o.id AND l.kind = 'DEBIT' \
+         WHERE o.dry_run = 0 AND o.status IN ({COUNTED_STATUSES}) \
+         AND l.created_at >= ?1 AND l.created_at < ?2 AND (?3 IS NULL OR o.tg_id = ?3)"
+    );
+    conn.query_row(&sql, params![start, end, tg_id], |r| r.get(0))
+}
+
+fn last_debit(conn: &Connection, tg_id: i64) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT MAX(created_at) FROM ledger WHERE tg_id = ?1 AND kind = 'DEBIT'",
+        [tg_id],
+        |r| r.get(0),
+    )
 }
 
 /// Σ CREDIT − Σ DEBIT + Σ REVERSAL (FR-5). Works on a connection or a transaction.
@@ -382,12 +410,30 @@ impl Db {
     /// The caller must already have checked the pause switch (`config::paused`) and the caps
     /// (`caps::check`) before calling; this function does neither. `total_zat` must equal the
     /// order's `price_zat + fee_zat` (an error otherwise, so a bug cannot under-debit).
+    #[cfg(test)]
     pub fn confirm_order(
         &self,
         id: &str,
         tg_id: i64,
         total_zat: i64,
         now: i64,
+    ) -> Result<ConfirmOutcome> {
+        self.confirm_order_checked(id, tg_id, total_zat, now, (0, i64::MAX), |_| {
+            crate::caps::Decision::Allow
+        })
+    }
+
+    /// `confirm_order` with the caps check inside the same `BEGIN IMMEDIATE` transaction, so
+    /// no other writer (another process, another ✅) can spend between the check and the DEBIT.
+    /// `day` is the IST window; spend is attributed to DEBIT (confirm) time, not quote time.
+    pub fn confirm_order_checked(
+        &self,
+        id: &str,
+        tg_id: i64,
+        total_zat: i64,
+        now: i64,
+        day: (i64, i64),
+        caps: impl FnOnce(Spend) -> crate::caps::Decision,
     ) -> Result<ConfirmOutcome> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -422,6 +468,14 @@ impl Db {
             total_zat == order_total,
             "confirm_order: total_zat does not match the order"
         );
+        let decision = caps(Spend {
+            user_inr: spent(&tx, Some(tg_id), day.0, day.1)?,
+            global_inr: spent(&tx, None, day.0, day.1)?,
+            last_purchase_at: last_debit(&tx, tg_id)?,
+        });
+        if decision != crate::caps::Decision::Allow {
+            return Ok(ConfirmOutcome::Refused(decision));
+        }
         if available(&tx, tg_id)? < total_zat {
             return Ok(ConfirmOutcome::InsufficientFunds);
         }
@@ -443,26 +497,15 @@ impl Db {
         Ok(ConfirmOutcome::Confirmed)
     }
 
-    /// Rupees committed in `[day_start, day_end)` by `orders.created_at` (BR-5 states only,
-    /// real orders only: `dry_run = 0`). `tg_id = None` sums across all users.
+    /// Rupees committed in `[day_start, day_end)` (BR-5 states, real orders only), attributed
+    /// to the DEBIT (confirm) time. `tg_id = None` sums across all users.
     pub fn spent_today_inr(&self, tg_id: Option<i64>, day_start: i64, day_end: i64) -> Result<i64> {
-        let sql = format!(
-            "SELECT COALESCE(SUM(inr), 0) FROM orders WHERE dry_run = 0 \
-             AND status IN ({COUNTED_STATUSES}) AND created_at >= ?1 AND created_at < ?2 \
-             AND (?3 IS NULL OR tg_id = ?3)"
-        );
-        Ok(self
-            .lock()
-            .query_row(&sql, params![day_start, day_end, tg_id], |r| r.get(0))?)
+        Ok(spent(&self.lock(), tg_id, day_start, day_end)?)
     }
 
     /// Time of the user's latest confirmed purchase (newest DEBIT), for BR-4 `TooSoon`.
     pub fn last_purchase_at(&self, tg_id: i64) -> Result<Option<i64>> {
-        Ok(self.lock().query_row(
-            "SELECT MAX(created_at) FROM ledger WHERE tg_id = ?1 AND kind = 'DEBIT'",
-            [tg_id],
-            |r| r.get(0),
-        )?)
+        Ok(last_debit(&self.lock(), tg_id)?)
     }
 }
 
@@ -694,10 +737,35 @@ impl Db {
     ) -> Result<bool> {
         let n = self.lock().execute(
             "UPDATE rules SET next_run_at = ?3, skip_next = 0, \
-             last_order_id = COALESCE(?4, last_order_id) WHERE id = ?1 AND next_run_at = ?2",
+             last_order_id = COALESCE(?4, last_order_id) \
+             WHERE id = ?1 AND next_run_at = ?2 AND active = 1 AND approved = 1",
             params![id, from_run_at, next_run_at, last_order_id],
         )?;
         Ok(n == 1)
+    }
+
+    /// Atomically claim a due slot for running. Returns the rule's `skip_next` as it was at
+    /// claim time (`None` = not claimed: already taken, stopped, or unapproved meanwhile), so a
+    /// Skip/Stop tap that lands before the claim always wins.
+    pub fn claim_rule_slot(&self, id: i64, run_at: i64, next_run_at: i64) -> Result<Option<bool>> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let skip: Option<bool> = tx
+            .query_row(
+                "SELECT skip_next FROM rules WHERE id = ?1 AND next_run_at = ?2 \
+                 AND active = 1 AND approved = 1",
+                params![id, run_at],
+                |r| Ok(r.get::<_, i64>(0)? != 0),
+            )
+            .optional()?;
+        if skip.is_some() {
+            tx.execute(
+                "UPDATE rules SET next_run_at = ?2, skip_next = 0 WHERE id = ?1",
+                params![id, next_run_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(skip)
     }
 }
 
@@ -783,6 +851,12 @@ mod tests {
         );
         assert_eq!(db.orders_in_status("QUOTED").unwrap().len(), 1);
         assert!(db.transition("o1", "QUOTED", "RECEIPTED", 5).unwrap());
+        db.lock()
+            .execute(
+                "INSERT INTO ledger (tg_id, kind, zat, order_id, created_at) VALUES (7, 'DEBIT', 1, 'o1', 5)",
+                [],
+            )
+            .unwrap();
         assert_eq!(
             db.stats(0, 100).unwrap(),
             Stats {
@@ -1064,6 +1138,16 @@ mod tests {
                     params![id, status],
                 )
                 .unwrap();
+            // Confirmed orders carry a DEBIT at confirm time; quoted/cancelled ones never do.
+            if !matches!(status, "QUOTED" | "CANCELLED") {
+                db.lock()
+                    .execute(
+                        "INSERT INTO ledger (tg_id, kind, zat, order_id, created_at) \
+                         VALUES (?1, 'DEBIT', 1, ?2, ?3)",
+                        params![tg, id, created],
+                    )
+                    .unwrap();
+            }
         };
         mk("a", USER, 100, false, "PURCHASING", NOW);
         mk("b", USER, 200, false, "DELIVERED", NOW + 10);
@@ -1079,6 +1163,57 @@ mod tests {
         assert_eq!(db.spent_today_inr(Some(8), day.0, day.1).unwrap(), 38_400);
         assert_eq!(db.spent_today_inr(None, day.0, day.1).unwrap(), 38_700);
         assert_eq!(db.spent_today_inr(Some(99), day.0, day.1).unwrap(), 0);
+    }
+
+    #[test]
+    fn spend_counts_on_the_day_it_was_confirmed_not_quoted() {
+        let db = db();
+        let today = (NOW, NOW + 86_400);
+        // Quoted 1 s before midnight, confirmed just after: it belongs to today.
+        db.insert_quote(&NewOrder {
+            created_at: NOW - 1,
+            quote_expires_at: NOW + 600,
+            ..quote("late", USER, 50, false)
+        })
+        .unwrap();
+        db.credit_deposit(USER, "tx-late", 10_000_000, NOW - 5)
+            .unwrap();
+        let total = db.get_order("late").unwrap().unwrap().total_zat();
+        assert_eq!(
+            db.confirm_order("late", USER, total, NOW + 1).unwrap(),
+            ConfirmOutcome::Confirmed
+        );
+        assert_eq!(
+            db.spent_today_inr(Some(USER), today.0, today.1).unwrap(),
+            50
+        );
+        assert_eq!(
+            db.spent_today_inr(Some(USER), NOW - 86_400, NOW).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn caps_check_runs_inside_the_confirm_transaction() {
+        let db = db();
+        db.credit_deposit(USER, "tx-c", 10_000_000, NOW).unwrap();
+        db.insert_quote(&quote("c1", USER, 50, false)).unwrap();
+        let total = db.get_order("c1").unwrap().unwrap().total_zat();
+        let refused = db
+            .confirm_order_checked("c1", USER, total, NOW, (NOW, NOW + 86_400), |_| {
+                crate::caps::Decision::UserDailyLimit
+            })
+            .unwrap();
+        assert_eq!(
+            refused,
+            ConfirmOutcome::Refused(crate::caps::Decision::UserDailyLimit)
+        );
+        assert_eq!(
+            db.get_order("c1").unwrap().unwrap().status,
+            "QUOTED",
+            "nothing debited"
+        );
+        assert_eq!(db.available_zat(USER).unwrap(), 10_000_000);
     }
 
     #[test]
