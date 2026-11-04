@@ -1,0 +1,6 @@
+// Landing page on Cloudflare Workers static assets: `npx wrangler deploy`
+{
+  "name": "shielded-shopping",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "web" }
+}
