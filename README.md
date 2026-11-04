@@ -134,7 +134,7 @@ Deposits and receipts are shielded, and Bitrefill sees our account, not yours. W
 
 ## Invoice ID of a real purchase
 
-`TODO: fill after the live ₹10 Jio purchase`
+`f626ee23-12dd-4e6c-aa12-94d2ebdcc1b5` (₹10 Jio talktime, 4 Nov 18:33 IST, Bitrefill status `all_delivered`, paid from store credit). A second agent purchase, `2a9091e4-baab-423b-a447-2f93953238e7`, followed at 18:34. Both orders then got their shielded receipt memo on Zcash testnet (txids `b7c77ea0…c425f` and `837a1bce…39a04`).
 
 ## Limitations
 
