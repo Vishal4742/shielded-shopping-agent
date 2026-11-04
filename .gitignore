@@ -6,3 +6,13 @@ tools/
 target/
 .claude/worktrees/
 .claude/settings.local.json
+
+# local only: research, design docs, AI tooling (kept on the laptop, not in the repo)
+docs/
+notes/
+research_notes/
+reports/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
