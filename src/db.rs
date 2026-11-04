@@ -556,9 +556,190 @@ impl Db {
     }
 }
 
+/// A recurring auto-pay rule. Approved once by the user; every run still goes through caps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    pub id: i64,
+    pub tg_id: i64,
+    pub operator: String,
+    pub phone: String,
+    pub inr: i64,
+    pub every_secs: i64,
+    pub next_run_at: i64,
+    pub approved: bool,
+    pub active: bool,
+    pub skip_next: bool,
+    pub warned_for: i64,
+    pub last_order_id: Option<String>,
+}
+
+const RULE_COLS: &str = "id, tg_id, operator, phone, inr, every_secs, next_run_at, approved, \
+     active, skip_next, warned_for, last_order_id";
+
+fn rule_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Rule> {
+    Ok(Rule {
+        id: r.get(0)?,
+        tg_id: r.get(1)?,
+        operator: r.get(2)?,
+        phone: r.get(3)?,
+        inr: r.get(4)?,
+        every_secs: r.get(5)?,
+        next_run_at: r.get(6)?,
+        approved: r.get::<_, i64>(7)? != 0,
+        active: r.get::<_, i64>(8)? != 0,
+        skip_next: r.get::<_, i64>(9)? != 0,
+        warned_for: r.get(10)?,
+        last_order_id: r.get(11)?,
+    })
+}
+
+/// Auto-pay rules.
+impl Db {
+    /// New rule awaiting the user's ✅. Returns its id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_rule(
+        &self,
+        tg_id: i64,
+        operator: &str,
+        phone: &str,
+        inr: i64,
+        every_secs: i64,
+        first_run_at: i64,
+        now: i64,
+    ) -> Result<i64> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO rules (tg_id, operator, phone, inr, every_secs, next_run_at, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![tg_id, operator, phone, inr, every_secs, first_run_at, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_rule(&self, id: i64) -> Result<Option<Rule>> {
+        Ok(self
+            .lock()
+            .query_row(
+                &format!("SELECT {RULE_COLS} FROM rules WHERE id = ?1"),
+                [id],
+                rule_from_row,
+            )
+            .optional()?)
+    }
+
+    /// ✅ on the rule card. Owner-checked; `true` iff it was pending and is now approved.
+    pub fn approve_rule(&self, id: i64, tg_id: i64) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE rules SET approved = 1 WHERE id = ?1 AND tg_id = ?2 AND approved = 0 AND active = 1",
+            params![id, tg_id],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// Owner-checked stop. `true` iff it was active.
+    pub fn stop_rule(&self, id: i64, tg_id: i64) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE rules SET active = 0 WHERE id = ?1 AND tg_id = ?2 AND active = 1",
+            params![id, tg_id],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// Owner-checked: skip the next run only.
+    pub fn skip_next_run(&self, id: i64, tg_id: i64) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE rules SET skip_next = 1 WHERE id = ?1 AND tg_id = ?2 AND active = 1 AND approved = 1",
+            params![id, tg_id],
+        )?;
+        Ok(n == 1)
+    }
+
+    pub fn active_rules(&self, tg_id: i64) -> Result<Vec<Rule>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RULE_COLS} FROM rules WHERE tg_id = ?1 AND active = 1 AND approved = 1 ORDER BY id"
+        ))?;
+        let rows = stmt.query_map([tg_id], rule_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Approved, active rules whose next run is at or before `until`.
+    pub fn rules_due_by(&self, until: i64) -> Result<Vec<Rule>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RULE_COLS} FROM rules WHERE active = 1 AND approved = 1 AND next_run_at <= ?1 \
+             ORDER BY next_run_at, id"
+        ))?;
+        let rows = stmt.query_map([until], rule_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn mark_rule_warned(&self, id: i64, run_at: i64) -> Result<()> {
+        self.lock().execute(
+            "UPDATE rules SET warned_for = ?2 WHERE id = ?1",
+            params![id, run_at],
+        )?;
+        Ok(())
+    }
+
+    /// After a run (or skip): schedule the next one, clear the skip flag, remember the order.
+    /// Conditional on `from_run_at` so two loops can't both run the same slot.
+    pub fn advance_rule(
+        &self,
+        id: i64,
+        from_run_at: i64,
+        next_run_at: i64,
+        last_order_id: Option<&str>,
+    ) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE rules SET next_run_at = ?3, skip_next = 0, \
+             last_order_id = COALESCE(?4, last_order_id) WHERE id = ?1 AND next_run_at = ?2",
+            params![id, from_run_at, next_run_at, last_order_id],
+        )?;
+        Ok(n == 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rules_need_owner_approval_and_advance_once_per_slot() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_invite("I", 5).unwrap();
+        db.admit("I", 1, None, 0).unwrap();
+        db.admit("I", 2, None, 0).unwrap();
+        let id = db
+            .insert_rule(1, "jio", "9876543210", 10, 120, 1000, 900)
+            .unwrap();
+        assert!(
+            db.rules_due_by(5000).unwrap().is_empty(),
+            "unapproved rules never run"
+        );
+        assert!(!db.approve_rule(id, 2).unwrap(), "only the owner approves");
+        assert!(db.approve_rule(id, 1).unwrap());
+        assert!(!db.approve_rule(id, 1).unwrap(), "approve once");
+        assert_eq!(db.rules_due_by(999).unwrap().len(), 0);
+        assert_eq!(db.rules_due_by(1000).unwrap().len(), 1);
+        assert!(db.advance_rule(id, 1000, 1120, Some("o1")).unwrap());
+        assert!(
+            !db.advance_rule(id, 1000, 1120, Some("o2")).unwrap(),
+            "slot already taken"
+        );
+        assert_eq!(
+            db.get_rule(id).unwrap().unwrap().last_order_id.as_deref(),
+            Some("o1")
+        );
+        assert!(!db.skip_next_run(id, 2).unwrap());
+        assert!(db.skip_next_run(id, 1).unwrap());
+        assert!(db.get_rule(id).unwrap().unwrap().skip_next);
+        assert!(!db.stop_rule(id, 2).unwrap());
+        assert!(db.stop_rule(id, 1).unwrap());
+        assert!(db.rules_due_by(i64::MAX).unwrap().is_empty());
+        assert!(db.active_rules(1).unwrap().is_empty());
+    }
 
     #[test]
     fn hack_day_helpers_round_trip() {

@@ -1,5 +1,6 @@
 //! Shielded Shopping Agent. `ssa` runs the bot; `ssa invite <CODE> <USES>` adds an invite code.
 
+mod autopay;
 mod bitrefill;
 mod caps;
 mod config;

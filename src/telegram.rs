@@ -13,8 +13,9 @@ use teloxide::types::{
     MessageId,
 };
 
+use crate::autopay;
 use crate::caps::{self, Decision};
-use crate::db::Order;
+use crate::db::{Order, Rule};
 use crate::intent::{self, Intent};
 use crate::model::Operator;
 use crate::orders::{self, App, BuyOutcome, QuoteOutcome};
@@ -41,6 +42,7 @@ const MSG_PAUSED: &str = "Purchases are paused by the operator right now.";
 const MSG_UNCERTAIN: &str =
     "I'm checking this order with Bitrefill. Nothing to do on your side; I'll message you.";
 const MSG_DRY_RUN: &str = "Dry run: nothing was bought and your budget is restored.";
+const MSG_AUTO_HINT: &str = "Set a recurring top-up like this:\n/auto jio 9876543210 10 weekly\nSchedules: daily, weekly, monthly, or every 2m / every 3 hours.";
 const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 10\n(operator, phone number, rupees). /help for more.";
 const MSG_VIEWKEY_HELP: &str = "Read-only: it shows your deposits and receipts, nothing can be spent with it. Import it as a watch-only account in Zingo or zcash-devtool.";
 
@@ -53,6 +55,7 @@ static WALLET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn run(app: Arc<App>) -> anyhow::Result<()> {
     let bot = Bot::new(app.cfg.telegram_bot_token.clone());
     let http = reqwest::Client::new();
+    tokio::spawn(autopay::run_loop(app.clone(), bot.clone()));
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(on_message))
         .branch(Update::filter_callback_query().endpoint(on_callback));
@@ -123,6 +126,9 @@ async fn handle_message(
         Some(("help", _)) => send(bot, chat, help_text()).await,
         Some(("balance", _)) => cmd_balance(bot, app, chat, tg_id).await,
         Some(("viewkey", _)) => cmd_viewkey(bot, app, chat, tg_id).await,
+        Some(("auto", _)) => cmd_auto(bot, app, chat, tg_id, command_args(text), now).await,
+        Some(("rules", _)) => cmd_rules(bot, app, chat, tg_id).await,
+        Some(("stop", arg)) => cmd_stop(bot, app, chat, tg_id, arg).await,
         Some(_) => send(bot, chat, MSG_HINT.to_owned()).await,
         None => handle_text(bot, app, http, chat, tg_id, text, now).await,
     }
@@ -298,7 +304,13 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     }
     let (chat, card_id) = (card.chat().id, card.id());
     let tg_id = tg_id_of(&q.from);
+    let rule_id = || order_id.parse::<i64>().ok();
     match action {
+        Action::ApproveRule | Action::SkipRule | Action::StopRule => {
+            let Some(id) = rule_id() else { return Ok(()) };
+            let text = rule_callback(app, action, id, tg_id)?;
+            finish_card(bot, app, chat, card_id, text).await;
+        }
         Action::Cancel => {
             let text = if orders::cancel(app, order_id, tg_id, now)? {
                 MSG_CANCELLED
@@ -349,12 +361,163 @@ async fn finish_card(bot: &Bot, app: &App, chat: ChatId, card: MessageId, text: 
     }
 }
 
+// ---------------------------------------------------------------- auto-pay
+
+async fn cmd_auto(
+    bot: &Bot,
+    app: &App,
+    chat: ChatId,
+    tg_id: i64,
+    args: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    if wallet_of(bot, app, chat, tg_id).await?.is_none() {
+        return Ok(());
+    }
+    let Some(spec) = autopay::parse_rule(args) else {
+        return send(bot, chat, MSG_AUTO_HINT.to_owned()).await;
+    };
+    if app.db.active_rules(tg_id)?.len() >= autopay::MAX_RULES_PER_USER {
+        return send(
+            bot,
+            chat,
+            format!(
+                "You already have {} auto-pay rules. /stop one first.",
+                autopay::MAX_RULES_PER_USER
+            ),
+        )
+        .await;
+    }
+    // A demo-friendly first run: one period from now, but at least 2 minutes away so the
+    // warning with [Skip] always fires first.
+    let first_run = now + spec.every_secs.max(2 * autopay::WARN_LEAD_SECS);
+    let id = app.db.insert_rule(
+        tg_id,
+        spec.operator.as_str(),
+        &spec.phone,
+        spec.inr,
+        spec.every_secs,
+        first_run,
+        now,
+    )?;
+    let rule = app
+        .db
+        .get_rule(id)?
+        .ok_or_else(|| anyhow::anyhow!("rule vanished"))?;
+    bot.send_message(chat, rule_card(&rule))
+        .reply_markup(autopay::rule_keyboard(id))
+        .await?;
+    Ok(())
+}
+
+async fn cmd_rules(bot: &Bot, app: &App, chat: ChatId, tg_id: i64) -> anyhow::Result<()> {
+    let rules = app.db.active_rules(tg_id)?;
+    if rules.is_empty() {
+        return send(
+            bot,
+            chat,
+            "No auto-pay rules. Try: /auto jio 9876543210 10 weekly".to_owned(),
+        )
+        .await;
+    }
+    let list = rules
+        .iter()
+        .map(|r| {
+            format!(
+                "#{} {}
+   next run {}",
+                r.id,
+                rule_line(r),
+                ist_time(r.next_run_at)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    send(
+        bot,
+        chat,
+        format!("Your auto-pay rules:\n{list}\n\nStop one with /stop <number>."),
+    )
+    .await
+}
+
+async fn cmd_stop(bot: &Bot, app: &App, chat: ChatId, tg_id: i64, arg: &str) -> anyhow::Result<()> {
+    let text = match arg.trim_start_matches('#').parse::<i64>() {
+        Ok(id) if app.db.stop_rule(id, tg_id)? => format!("🛑 Auto-pay #{id} stopped."),
+        Ok(_) => "No active rule with that number. See /rules.".to_owned(),
+        Err(_) => "Usage: /stop <rule number> (see /rules)".to_owned(),
+    };
+    send(bot, chat, text).await
+}
+
+fn rule_callback(app: &App, action: Action, id: i64, tg_id: i64) -> anyhow::Result<String> {
+    let Some(rule) = app.db.get_rule(id)? else {
+        return Ok("That rule no longer exists.".to_owned());
+    };
+    if rule.tg_id != tg_id {
+        return Ok("Not your rule.".to_owned());
+    }
+    Ok(match action {
+        Action::ApproveRule if app.db.approve_rule(id, tg_id)? => format!(
+            "✅ Auto-pay #{id} is on: {}\nFirst run {}. I'll ping you a minute before each run with a Skip button.\nLimits still apply to every run. /rules to see it, /stop {id} to end it.",
+            rule_line(&rule),
+            ist_time(rule.next_run_at),
+        ),
+        Action::SkipRule if app.db.skip_next_run(id, tg_id)? => {
+            format!("⏭ OK, I'll skip the next run of #{id}. The rule stays on.")
+        }
+        Action::StopRule if app.db.stop_rule(id, tg_id)? => {
+            format!("🛑 Auto-pay #{id} stopped. Nothing more will be bought by it.")
+        }
+        _ => "That rule isn't open for this action any more. See /rules.".to_owned(),
+    })
+}
+
+/// `Jio ₹10 → xxxxxxxx10 every week`
+pub(crate) fn rule_line(rule: &Rule) -> String {
+    format!(
+        "{} ₹{} → {} {}",
+        operator_label(&rule.operator),
+        rule.inr,
+        mask_phone(&rule.phone),
+        autopay::every_label(rule.every_secs),
+    )
+}
+
+fn rule_card(rule: &Rule) -> String {
+    format!(
+        "🤖 New auto-pay rule\n{}\nFirst run: {}\n\nOnce you allow it, I buy this on schedule without asking each time. Every run still respects your limits (₹{}–₹{} per order, ₹{} per day) and the operator's kill switch, and I warn you a minute before with a Skip button.",
+        rule_line(rule),
+        ist_time(rule.next_run_at),
+        caps::MIN_INR,
+        caps::MAX_INR,
+        caps::USER_DAILY_INR,
+    )
+}
+
+/// `14:32 IST, 4 Nov`
+pub(crate) fn ist_time(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts + IST_OFFSET_SECS, 0)
+        .map(|t| t.format("%H:%M IST, %-d %b").to_string())
+        .unwrap_or_default()
+}
+
+/// Everything after the command word: `/auto jio 98.. 10 weekly` -> `jio 98.. 10 weekly`.
+fn command_args(text: &str) -> &str {
+    text.trim()
+        .split_once(char::is_whitespace)
+        .map_or("", |(_, rest)| rest.trim())
+}
+
 // ---------------------------------------------------------------- pure helpers
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Buy,
     Cancel,
+    ApproveRule,
+    SkipRule,
+    StopRule,
 }
 
 /// `buy:<id>` / `cancel:<id>`; anything else (or a malformed id) is ignored.
@@ -363,6 +526,9 @@ fn parse_callback(data: &str) -> Option<(Action, &str)> {
     let action = match action {
         "buy" => Action::Buy,
         "cancel" => Action::Cancel,
+        "rule" => Action::ApproveRule,
+        "skip" => Action::SkipRule,
+        "stop" => Action::StopRule,
         _ => return None,
     };
     let valid = !id.is_empty()
@@ -476,7 +642,10 @@ fn help_text() -> String {
          Limits: ₹{min}–₹{max} per order, ₹{day} per day\n\n\
          I show a price first; nothing is bought until you tap ✅ Buy.\n\n\
          /balance: your budget and deposit address\n\
-         /viewkey: your read-only viewing key",
+         /viewkey: your read-only viewing key\n\n\
+         Auto-pay (I buy on schedule, within your limits):\n\
+         /auto jio 9876543210 10 weekly\n\
+         /rules: your rules · /stop <n>: end one",
         min = caps::MIN_INR,
         max = caps::MAX_INR,
         day = caps::USER_DAILY_INR,
@@ -498,7 +667,7 @@ fn quote_card(order: &Order, now: i64) -> String {
 }
 
 /// Reply for any `create_quote` result; the `Quoted` card gets its buttons from the caller.
-fn quote_text(outcome: &QuoteOutcome, requested_inr: i64, now: i64) -> String {
+pub(crate) fn quote_text(outcome: &QuoteOutcome, requested_inr: i64, now: i64) -> String {
     match outcome {
         QuoteOutcome::Quoted(order) => quote_card(order, now),
         QuoteOutcome::Refused(decision) => decision_text(*decision),
@@ -522,7 +691,7 @@ fn no_package_text(requested_inr: i64, available_inr: &[i64]) -> String {
     format!("There's no ₹{requested_inr} package for that operator. Available: {list}.")
 }
 
-fn buy_text(outcome: &BuyOutcome, now: i64) -> String {
+pub(crate) fn buy_text(outcome: &BuyOutcome, now: i64) -> String {
     match outcome {
         BuyOutcome::Delivered(order) => format!(
             "✅ Top-up successful\n{} ₹{} → {}\n{} · Ref {}\nYour shielded receipt is on its way; only your /viewkey can read it.",
@@ -680,6 +849,40 @@ mod tests {
             quote_text(&QuoteOutcome::Refused(Decision::AmountOutOfRange), 99, 0)
                 .contains("₹10 to ₹50")
         );
+    }
+
+    #[test]
+    fn parses_rule_callbacks_and_command_args() {
+        assert_eq!(parse_callback("rule:12"), Some((Action::ApproveRule, "12")));
+        assert_eq!(parse_callback("skip:3"), Some((Action::SkipRule, "3")));
+        assert_eq!(parse_callback("stop:3"), Some((Action::StopRule, "3")));
+        assert_eq!(parse_callback("delete:3"), None);
+        assert_eq!(
+            command_args("/auto jio 9876543210 10 weekly"),
+            "jio 9876543210 10 weekly"
+        );
+        assert_eq!(command_args("/auto@zcashdemo_bot  jio 1 2"), "jio 1 2");
+        assert_eq!(command_args("/auto"), "");
+    }
+
+    #[test]
+    fn rule_line_masks_phone_and_reads_schedule() {
+        let rule = Rule {
+            id: 1,
+            tg_id: 1,
+            operator: "jio".into(),
+            phone: "9876543210".into(),
+            inr: 10,
+            every_secs: 120,
+            next_run_at: 0,
+            approved: true,
+            active: true,
+            skip_next: false,
+            warned_for: 0,
+            last_order_id: None,
+        };
+        assert_eq!(rule_line(&rule), "Jio ₹10 → xxxxxxxx10 every 2 minutes");
+        assert!(!rule_card(&rule).contains("9876543210"));
     }
 
     #[test]
