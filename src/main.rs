@@ -12,6 +12,7 @@ mod order_fsm;
 mod orders;
 mod price;
 mod quote;
+mod refill;
 mod telegram;
 mod workers;
 mod zec;
@@ -49,6 +50,9 @@ async fn main() -> anyhow::Result<()> {
     db.migrate()?;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("refill") {
+        return refill_cmd(&args[1..]).await;
+    }
     if let [cmd, birthday] = args.as_slice() {
         anyhow::ensure!(
             cmd == "audit",
@@ -121,4 +125,50 @@ async fn main() -> anyhow::Result<()> {
     });
 
     telegram::run(app).await
+}
+
+/// `ssa refill <USD> <usdc-base|btc> <BITREFILL_DEPOSIT_ADDR> <ZEC_REFUND_ADDR>` prints a live
+/// 1Click deposit address + exact ZEC amount; `ssa refill status <DEPOSIT_ADDR>` tracks it.
+async fn refill_cmd(args: &[String]) -> anyhow::Result<()> {
+    const USAGE: &str = "usage: ssa refill <USD> <usdc-base|btc> <BITREFILL_DEPOSIT_ADDR> <ZEC_REFUND_ADDR> [--dry]\n       ssa refill status <DEPOSIT_ADDR>";
+    if let [cmd, deposit] = args {
+        anyhow::ensure!(cmd == "status", USAGE);
+        println!("{:?}", refill::status(deposit).await?);
+        return Ok(());
+    }
+    let (usd, dest, recipient, refund, dry) = match args {
+        [u, d, r, f] => (u, d, r, f, false),
+        [u, d, r, f, flag] if flag == "--dry" => (u, d, r, f, true),
+        _ => anyhow::bail!(USAGE),
+    };
+    let usd_cents =
+        quote::parse_usd_cents(usd).map_err(|e| anyhow::anyhow!("bad USD amount: {e:?}"))?;
+    let dest = refill::Dest::parse(dest).context(USAGE)?;
+    let prices = price::PriceCache::new()?
+        .prices(chrono::Utc::now().timestamp())
+        .await?;
+    let q = refill::quote(
+        dest,
+        usd_cents,
+        prices.btc_usd_cents,
+        recipient,
+        refund,
+        dry,
+    )
+    .await?;
+    println!(
+        "Swap {} ZEC -> {} to Bitrefill, about {} min.",
+        q.amount_in_formatted,
+        q.amount_out_formatted,
+        q.time_estimate_secs / 60 + 1
+    );
+    match (&q.deposit_address, refill::payment_uri(&q)) {
+        (Some(addr), Some(uri)) => {
+            println!("Send exactly {} ZEC to: {addr}", q.amount_in_formatted);
+            println!("Or scan/paste this payment URI: {uri}");
+            println!("Then track it: ssa refill status {addr}");
+        }
+        _ => println!("(dry run: no deposit address reserved)"),
+    }
+    Ok(())
 }
