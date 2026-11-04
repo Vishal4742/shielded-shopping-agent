@@ -86,7 +86,7 @@ code { font-family: var(--mono); font-size: 0.875em; }
 .brand { display: flex; align-items: center; gap: 8px; font: 600 16px/24px var(--display); text-decoration: none; white-space: nowrap; }
 .mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; background: var(--black); color: var(--orange); font: 500 14px/1 var(--mono); border: 1px solid var(--line); }
 .links { display: flex; gap: 24px; font-size: 14px; line-height: 20px; color: var(--text-2); }
-.links a { text-decoration: none; transition: color 300ms var(--ease); }
+.links a { text-decoration: none; white-space: nowrap; transition: color 300ms var(--ease); }
 .links a:hover { color: var(--text); }
 
 /* ---------- hero ---------- */
@@ -112,7 +112,12 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .facts dt { font-size: 12px; line-height: 16px; color: var(--text-3); }
 .facts dd { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
 
-.scan-fig canvas { display: block; width: 100%; height: 100%; }
+.art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
+.art canvas, .scan-fig canvas { display: block; width: 100%; height: 100%; }
+.art canvas.diorama { position: absolute; inset: 0; opacity: 0; transition: opacity .9s ease;
+  -webkit-mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); }
+.art canvas.diorama.on { opacity: 1; }
+.art figcaption { position: absolute; left: 0; right: 0; top: calc(100% + 8px); font-size: 14px; line-height: 20px; color: var(--text-2); text-wrap: balance; }
 
 /* corner crop marks: 8 flat segments in one layer */
 .crop { position: relative; }
@@ -163,7 +168,11 @@ h3 { font-size: 20px; line-height: 28px; }
 .hero-chat .chat-bar { background: var(--cobalt) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Ccircle cx='3' cy='3' r='1.1' fill='%23F4EFE4' fill-opacity='.22'/%3E%3C/svg%3E"); border-bottom: 0; color: var(--paper); }
 .hero-chat .chat-bar small { color: rgb(244 239 228 / .72); }
 .hero-chat .chat-avatar { background: var(--paper); color: var(--orange); border-color: var(--paper); }
-.hero-chat .chat-body { min-height: 0; padding: 16px; gap: 8px; }
+.hero-chat .chat-body { height: 560px; padding: 16px; gap: 8px; justify-content: flex-end; overflow: hidden; }
+/* like a real chat: unsent messages take no space, new ones arrive at the bottom */
+.hero-chat .msg:not(.on) { display: none; }
+.hero-chat .msg.on { animation: msg-in 500ms var(--ease) both; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(8px); } }
 .hero-chat .msg { font-size: 16px; line-height: 24px; }
 .hero-chat .msg.me { font-size: 14px; line-height: 20px; }
 .hero-chat .msg.bot { background: #FBF8F1; border: 1px solid rgb(20 28 63 / .14); color: var(--ink); }
@@ -371,6 +380,7 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
   .hero { padding-top: 112px; }
   .hero-grid, .demo-grid, .scan-grid, .try-grid, .faq-grid { grid-template-columns: minmax(0, 1fr); gap: 48px; }
   .hero-chat { justify-self: stretch; max-width: none; }
+  .art { justify-self: center; max-width: 440px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .qr { justify-self: start; }
   .wordmark { font-size: 96px; }
@@ -398,5 +408,6 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal, .msg { transform: none !important; transition: opacity 300ms linear; }
+  .hero-chat .msg.on { animation: none; }
   .node::before { animation: none !important; display: none; }
 }
