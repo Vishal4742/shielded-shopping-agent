@@ -281,6 +281,10 @@ pub async fn confirm_and_buy(
 
 /// Order is PURCHASING with its DEBIT written. Never retries the purchase.
 async fn purchase(app: &App, order: Order) -> anyhow::Result<BuyOutcome> {
+    // Caps skip dry-run orders, so a quote made under BITREFILL_DRY_RUN=1 must never buy for real.
+    if order.dry_run != app.cfg.bitrefill_dry_run {
+        return fail_and_refund(app, &order, "dry-run setting changed since the quote").await;
+    }
     let operator =
         Operator::parse(&order.operator).ok_or_else(|| anyhow::anyhow!("bad operator"))?;
     let package = match app.bitrefill.get_product(slug_for(operator)).await {
@@ -303,10 +307,12 @@ async fn purchase(app: &App, order: Order) -> anyhow::Result<BuyOutcome> {
             fail_and_refund(app, &order, "dry run: no invoice created").await?;
             return Ok(BuyOutcome::DryRun(reload(&app.db, &order.id)?));
         }
-        // Rejected before any invoice exists: definitely not charged.
+        // Rejected before any invoice exists: definitely not charged. 408/409/425 are not on
+        // this list: an invoice may exist, so they fall through to UNCERTAIN.
         Err(
             e @ (bitrefill::Error::Http {
-                status: 400..=499, ..
+                status: 400 | 401 | 402 | 403 | 404 | 422,
+                ..
             }
             | bitrefill::Error::RateLimited),
         ) => {
@@ -346,9 +352,22 @@ async fn fail_and_refund(app: &App, order: &Order, why: &str) -> anyhow::Result<
     let why = &scrub_phone(why, &order.phone);
     let now = now_ts();
     app.db.set_error(&order.id, why, now)?;
-    advance(&app.db, order, Event::Fail, now)?;
-    app.db.reverse_order(&order.id, order.total_zat(), now)?;
+    let refunded = fail_with_refund(&app.db, order, Event::Fail, now)?;
+    anyhow::ensure!(refunded, "order {} moved before its refund", order.id);
     Ok(BuyOutcome::Failed(reload(&app.db, &order.id)?))
+}
+
+/// FSM-checked move to FAILED plus its REVERSAL, atomically. `false` if someone else moved it.
+fn fail_with_refund(db: &Db, order: &Order, event: Event, now: i64) -> anyhow::Result<bool> {
+    let from = order_fsm::parse(&order.status)?;
+    let to = order_fsm::apply(from, event)?;
+    db.fail_and_reverse(
+        &order.id,
+        order_fsm::as_str(from),
+        order_fsm::as_str(to),
+        order.total_zat(),
+        now,
+    )
 }
 
 fn mark_uncertain(app: &App, order: &Order, why: &str) -> anyhow::Result<BuyOutcome> {
@@ -384,10 +403,12 @@ pub async fn resolve_uncertain(app: &App) -> anyhow::Result<Vec<Order>> {
             _ => continue,
         };
         let now = now_ts();
-        if advance(&app.db, &order, event, now)? {
-            if event == Event::ResolveFailed {
-                app.db.reverse_order(&order.id, order.total_zat(), now)?;
-            }
+        let moved = if event == Event::ResolveFailed {
+            fail_with_refund(&app.db, &order, event, now)?
+        } else {
+            advance(&app.db, &order, event, now)?
+        };
+        if moved {
             changed.push(reload(&app.db, &order.id)?);
         }
     }
@@ -461,7 +482,7 @@ mod tests {
                 usd_cents: 12,
                 price_zat: 9_000,
                 fee_zat: FEE_ZAT,
-                dry_run: true,
+                dry_run: app.cfg.bitrefill_dry_run,
                 quote_expires_at: now + QUOTE_TTL_SECS,
                 created_at: now,
             })

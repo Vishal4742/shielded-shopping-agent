@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
@@ -340,6 +340,8 @@ impl Db {
 
     /// Writes a REVERSAL for a failed order. Idempotent via `UNIQUE(kind, order_id)`:
     /// `true` if written now, `false` if it already existed. Errors if the order is unknown.
+    /// Production refunds go through `fail_and_reverse`, which also moves the status.
+    #[cfg(test)]
     pub fn reverse_order(&self, order_id: &str, zat: i64, now: i64) -> Result<bool> {
         let conn = self.lock();
         let Some(tg_id) = conn
@@ -348,7 +350,7 @@ impl Db {
             })
             .optional()?
         else {
-            bail!("reverse_order: unknown order");
+            anyhow::bail!("reverse_order: unknown order");
         };
         let n = conn.execute(
             "INSERT INTO ledger (tg_id, kind, zat, order_id, created_at) \
@@ -356,6 +358,36 @@ impl Db {
             params![tg_id, zat, order_id, now],
         )?;
         Ok(n == 1)
+    }
+
+    /// Moves an order `from` → `to` (a FAILED state) and writes its REVERSAL in ONE
+    /// `BEGIN IMMEDIATE` transaction, so a crash can't leave a FAILED order with no refund.
+    /// `true` iff the status changed; the REVERSAL is written only then.
+    pub fn fail_and_reverse(
+        &self,
+        id: &str,
+        from: &str,
+        to: &str,
+        zat: i64,
+        now: i64,
+    ) -> Result<bool> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n = tx.execute(
+            "UPDATE orders SET status = ?3, updated_at = ?4 WHERE id = ?1 AND status = ?2",
+            params![id, from, to, now],
+        )?;
+        if n != 1 {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO ledger (tg_id, kind, zat, order_id, created_at) \
+             SELECT tg_id, 'REVERSAL', ?2, id, ?3 FROM orders WHERE id = ?1 \
+             ON CONFLICT DO NOTHING",
+            params![id, zat, now],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     // ---- orders ----
@@ -674,8 +706,9 @@ impl Db {
     /// ✅ on the rule card. Owner-checked; `true` iff it was pending and is now approved.
     pub fn approve_rule(&self, id: i64, tg_id: i64) -> Result<bool> {
         let n = self.lock().execute(
-            "UPDATE rules SET approved = 1 WHERE id = ?1 AND tg_id = ?2 AND approved = 0 AND active = 1",
-            params![id, tg_id],
+            "UPDATE rules SET approved = 1 WHERE id = ?1 AND tg_id = ?2 AND approved = 0 AND active = 1 \
+             AND (SELECT COUNT(*) FROM rules WHERE tg_id = ?2 AND active = 1 AND approved = 1) < ?3",
+            params![id, tg_id, crate::autopay::MAX_RULES_PER_USER as i64],
         )?;
         Ok(n == 1)
     }
@@ -1002,6 +1035,26 @@ mod tests {
         assert!(!db.reverse_order("o1", 100_000, NOW + 1).unwrap());
         assert_eq!(db.available_zat(USER).unwrap(), 500_000);
         assert!(db.reverse_order("ghost", 1, NOW).is_err());
+    }
+
+    #[test]
+    fn fail_and_reverse_refunds_once_and_only_when_status_moves() {
+        let db = db();
+        db.credit_deposit(USER, "tx1", 500_000, NOW).unwrap();
+        db.insert_quote(&quote("o1", USER, 100, false)).unwrap();
+        db.confirm_order("o1", USER, 100_000, NOW).unwrap();
+        assert_eq!(db.available_zat(USER).unwrap(), 400_000);
+        assert!(
+            db.fail_and_reverse("o1", "PURCHASING", "FAILED", 100_000, NOW)
+                .unwrap()
+        );
+        assert_eq!(db.available_zat(USER).unwrap(), 500_000);
+        assert!(
+            !db.fail_and_reverse("o1", "PURCHASING", "FAILED", 100_000, NOW)
+                .unwrap()
+        );
+        assert_eq!(db.available_zat(USER).unwrap(), 500_000, "no second refund");
+        assert_eq!(db.get_order("o1").unwrap().unwrap().status, "FAILED");
     }
 
     #[test]

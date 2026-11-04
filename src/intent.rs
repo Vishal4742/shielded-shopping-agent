@@ -84,7 +84,10 @@ fn normalize_phone(digits: &str) -> Option<String> {
             .or_else(|| d.strip_prefix("91"))
             .or_else(|| d.strip_prefix('0'))?;
     }
-    (d.len() == 10 && matches!(d.as_bytes()[0], b'6'..=b'9')).then(|| d.to_owned())
+    (d.len() == 10
+        && d.bytes().all(|b| b.is_ascii_digit())
+        && matches!(d.as_bytes()[0], b'6'..=b'9'))
+    .then(|| d.to_owned())
 }
 
 pub fn parse_claude_response(json: &str) -> Result<Intent, IntentError> {
@@ -160,8 +163,23 @@ pub async fn extract(client: &reqwest::Client, api_key: &str, model: &str, text:
     })
     .await;
     match result {
-        Ok(Ok(body)) => parse_claude_response(&body).unwrap_or_else(|_| fallback()),
+        Ok(Ok(body)) => match parse_claude_response(&body) {
+            Ok(intent) if phone_is_in_text(&intent, text) => intent,
+            _ => fallback(),
+        },
         _ => fallback(),
+    }
+}
+
+/// The quote card masks the phone, so a model that invents or transposes digits would go
+/// unnoticed. Accept its phone only if those 10 digits appear in what the user typed.
+fn phone_is_in_text(intent: &Intent, text: &str) -> bool {
+    match intent {
+        Intent::TopUp { phone, .. } => {
+            let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+            digits.contains(phone.as_str())
+        }
+        _ => true,
     }
 }
 

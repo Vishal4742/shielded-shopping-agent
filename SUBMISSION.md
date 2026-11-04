@@ -10,7 +10,7 @@ Paste-ready. Anything marked `TODO` is a value we don't have yet: fill it in or 
 
 **Repo:** https://github.com/Vishal4742/shielded-shopping-agent
 **Bot:** https://t.me/zcashdemo_bot (invite only; code in the demo notes)
-**Landing page:** https://shielded-shopping.buildday-qr.workers.dev
+**Landing page:** https://zecshop.vercel.app
 
 **Try it:** open [@zcashdemo_bot](https://t.me/zcashdemo_bot) and send `/start JUDGES-FSH` (invite code for judges, 30 uses). You get a testnet wallet; fund it from a faucet (Fauzec, 1 TAZ/day) or ask us for TAZ.
 

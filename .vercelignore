@@ -1,0 +1,10 @@
+web/diorama-src
+src
+target
+tools
+data
+fixtures
+notes
+docs
+migrations
+.env
