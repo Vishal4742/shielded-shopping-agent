@@ -278,7 +278,6 @@ fn build_response(request: &str, stats: impl FnOnce() -> anyhow::Result<(Stats, 
 
 /// Reads up to `HTTP_MAX_REQUEST` bytes, stopping at the blank line that ends the headers.
 // ponytail: hand-rolled HTTP for one GET route; switch to axum if routes grow.
-// (`readable`/`try_read` keep us on tokio's `net` feature, no `io-util` needed.)
 async fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
