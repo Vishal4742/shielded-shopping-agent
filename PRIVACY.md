@@ -7,7 +7,7 @@ This is a testnet demo, built in a day. Read this to see who learns what when yo
 - **On-chain activity.** Deposits into your budget and the receipt for each purchase are shielded Zcash transactions (Ironwood pool, unified addresses). A chain observer can't see the amounts, senders, receivers or memos.
 - **Receipts.** Each purchase leaves an encrypted memo on chain, `SSA·<order id>·<operator>·₹<amount>`. It carries no phone number. You can read your history with your viewing key (`/viewkey`, `/report`), and anyone you choose to give it to can import it and check the record.
 - **Your link to the top-up, from the merchant's side.** Your ZEC never reaches Bitrefill. We pay from a prefunded Bitrefill balance, so Bitrefill sees neither your Zcash address nor your Telegram account.
-- **The public stats page.** It shows aggregates only: no Telegram ids, phone numbers, addresses, txids or per-order times.
+- **The public stats page.** `/stats.json` returns four fields: delivered orders, rupees spent today, receipts sent and whether purchases are paused. No Telegram ids, phone numbers, addresses, txids or per-order times. The server accepts at most 32 connections at once.
 
 ## What the app reveals, and to whom
 
@@ -45,6 +45,7 @@ Bitrefill doesn't take ZEC, so the balance we pay from is prefunded. `ssa refill
 - The Bitrefill address is on a public chain too (Base, or Bitcoin).
 - It's our own refill, a single pooled transfer, not one per user. It doesn't name you or your purchases, but it does tell an observer that this operator funds Bitrefill with ZEC, and how much, when.
 - It's mainnet only. 1Click has no testnet, so the demo bot's testnet ZEC never goes through it.
+- We have done this once for real: 0.00519175 ZEC from a shielded wallet, swapped to BTC and credited to the Bitrefill balance as 6,619 sats (the balance then read 7,689 sats). 1Click's minimum for BTC was about $5. That transfer, its amount and the Bitrefill deposit address are public on the Zcash and Bitcoin chains.
 - The command prints the address, the exact ZEC amount and a ZIP-321 payment URI. The operator sends the ZEC from their own wallet, so the sending side's privacy is whatever that wallet does.
 
 ## Tor: `SSA_TOR=1`

@@ -5,7 +5,7 @@ What confused or slowed us down while building on the Bitrefill API at the Free 
 ## Account and balance
 
 - **The account currency defaults to BTC, and catalog prices follow it.** `GET /v2/accounts/balance` returned `{"balance":0,"currency":"BTC"}`, and every package `price` is an integer in satoshis that drifts with the BTC rate (₹10 Jio talktime was 141 sat). `?currency=USD` is ignored. We convert sats → USD cents with a BTC/USD price from NEAR 1Click; a USD price field on the package would remove that hop.
-- **The balance unit isn't documented.** With `currency: "BTC"`, is `balance` in BTC, sats or something else? We couldn't tell until the account was funded.
+- **The balance unit isn't documented.** With `currency: "BTC"`, is `balance` in BTC, sats or something else? We couldn't tell until the account was funded. After a 6,619-sat top-up it read 7,689, so we treat it as sats.
 
 ## Products and prices
 
@@ -20,7 +20,7 @@ What confused or slowed us down while building on the Bitrefill API at the Free 
 
 ## Payments
 
-- **No ZEC rail.** Bitrefill doesn't accept ZEC, and NEAR 1Click (the bridge route) has no testnet. The bot's purchases draw on a USD balance we prefund. For topping that balance up from real ZEC we wrote `ssa refill` (below).
+- **No ZEC rail.** Bitrefill doesn't accept ZEC, and NEAR 1Click (the bridge route) has no testnet. The bot's purchases draw on a balance we prefund (in satoshis, because our account currency is BTC). For topping that balance up from real ZEC we wrote `ssa refill` (below).
 
 ## NEAR Intents 1Click (for the ZEC refill)
 
@@ -31,7 +31,8 @@ Not a Bitrefill thing, but it's the other half of "pay Bitrefill from shielded Z
 - **Exact-output is the right mode for paying a merchant.** We want Bitrefill to receive exactly the amount we ask for, and `EXACT_OUTPUT` does that. The ZEC we send is what moves, and the quote comes with `minAmountIn` and a slippage setting in basis points.
 - **ZEC goes in at a transparent address.** That's the one place the flow leaves the shielded pool. We'd have liked to pay from a shielded address. We say so in PRIVACY.md instead.
 - **The echoed `quoteRequest` has an `appFees` entry we didn't send.** We haven't chased where it comes from.
-- **No testnet.** We can only try the quote and status calls on mainnet, with small real amounts. So far we have the dry quote only, and a live refill is still to do.
+- **No testnet.** We can only try the quote and status calls on mainnet, with small real amounts. We ran a dry quote, then one live refill: 0.00519175 ZEC became 6,619 sats of BTC in the Bitrefill balance.
+- **The minimum is higher for BTC than we expected.** 1Click wanted about $5 for a BTC swap, so we fund the balance once and spend it down over many ₹10 orders instead of refilling per order.
 
 ## Still to fill in
 

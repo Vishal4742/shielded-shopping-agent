@@ -33,7 +33,7 @@ Prints the same CSV for an outside auditor. Details are in the README.
 ## Pre-demo checklist
 
 - [ ] **Wallet funded.** `/balance` shows enough testnet ZEC for the ₹10 quote plus the network fee on the quote card (25,000 zat). Faucet funds need about 10 confirmations before they count, so fund early.
-- [ ] **Bitrefill balance funded.** The account balance is what pays for the top-up. If it reads 0, ask a Bitrefill mentor for event credits.
+- [ ] **Bitrefill balance funded.** The account balance is what pays for the top-up. Ours was funded from shielded ZEC through NEAR 1Click and read 7,689 sats before the first live buy. If it reads 0, ask a Bitrefill mentor for event credits.
 - [ ] **`BITREFILL_DRY_RUN=0`** in `.env` for the take. The default in `.env.example` is `1`, which buys nothing and answers "Dry run: nothing was bought and your budget is restored." Rehearse with `1`. Bitrefill allows **5 phone top-ups per account per day**, so spend at most one or two real ones.
 - [ ] **Restart the bot after editing `.env`** (`cargo run --release`). Only `SSA_PAUSED` is re-read live. Set it back to `0` after the kill-switch beat.
 - [ ] **`SSA_TOR` choice.** `SSA_TOR=1` sends wallet sync, receipts and account creation over Tor: about 11 s per call instead of 2 s, and the light-wallet server then sees a Tor exit, not your IP. For the take, use `SSA_TOR=0` so the receipt lands sooner; if you want Tor in the story, say it in the voice-over. `/report` and `ssa audit` connect directly either way.
