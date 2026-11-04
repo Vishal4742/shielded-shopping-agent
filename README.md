@@ -29,7 +29,7 @@ cd tools/zcash-devtool && git checkout 0b3436b && cargo build --release
 - `web/`: the landing page (static HTML, CSS and JS, no build step). Open `web/index.html` or run `python3 -m http.server -d web`.
 - `.env.example`: every config key the bot reads.
 
-Design docs and research notes live with Vishal, not in this repo. Ask if you need the spec for a feature.
+How it fits together: [ARCHITECTURE.md](ARCHITECTURE.md) (what we're building, modules, order states, who owns what). Detailed design docs and research notes live with Vishal; ask if you need the spec for a feature.
 
 ## Working together
 
