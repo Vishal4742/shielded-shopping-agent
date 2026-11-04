@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/Users/vg890/Zcash/.codex/hooks/format-on-edit.sh'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/Users/vg890/Zcash/.codex/hooks/stop-reminder.sh'"
+          }
+        ]
+      }
+    ]
+  }
+}
