@@ -114,6 +114,9 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 
 .art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
 .art canvas, .scan-fig canvas { display: block; width: 100%; height: 100%; }
+.art canvas.diorama { position: absolute; inset: 0; opacity: 0; transition: opacity .9s ease;
+  -webkit-mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); }
+.art canvas.diorama.on { opacity: 1; }
 .art figcaption, .scan-fig figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 
 /* corner crop marks: 8 flat segments in one layer */

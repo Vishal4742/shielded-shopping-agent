@@ -110,6 +110,7 @@ function startHero(fontsReady) {
       if (running) raf = requestAnimationFrame(tick);
     };
     const play = (on) => {
+      on = on && !heroRetired;
       if (on === running) return;
       running = on;
       if (on) raf = requestAnimationFrame(tick); else cancelAnimationFrame(raf);
@@ -118,7 +119,32 @@ function startHero(fontsReady) {
     onVisible(canvas, (v) => { inView = v; play(v && !document.hidden); });
     document.addEventListener("visibilitychange", () => play(inView && !document.hidden));
     addEventListener("resize", () => { r.resize(); lastFrame = -1; });
+    retireHero = () => { heroRetired = true; play(false); };
   }).catch(() => { cap.textContent = "The artwork failed to load. Reload the page to try again."; });
+}
+
+/* ---------- hero upgrade: live 3D ASCII diorama (diorama/diorama.js), loaded after first paint.
+   The sprite hero above stays as the fallback: no WebGL2, narrow screens, reduced motion, or any load error. */
+let heroRetired = false, retireHero = () => { heroRetired = true; };
+function startDiorama() {
+  const fig = $(".art"), old = $("#hero-canvas"), cap = $("#hero-cap");
+  if (!fig || reduced || innerWidth < 640 || !document.createElement("canvas").getContext("webgl2")) return;
+  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
+  const go = () => idle(() => import("./diorama/diorama.js").then((m) => m.start(fig)).then((d) => {
+    d.canvas.className = "diorama";
+    d.canvas.setAttribute("aria-hidden", "true");
+    fig.insertBefore(d.canvas, cap);
+    fig.setAttribute("aria-label", "A Mumbai street corner at dusk drawn in moving text glyphs: coins drift from a shielded vault to an orange-awning recharge kiosk");
+    retireHero();
+    old.style.display = "none";
+    cap.textContent = `ascii diorama · ${d.cols} × ${d.rows} cells · live 3D`;
+    let inView = true;
+    onVisible(fig, (v) => { inView = v; d.play(v && !document.hidden); });
+    document.addEventListener("visibilitychange", () => d.play(inView && !document.hidden));
+    addEventListener("resize", () => { if (innerWidth >= 640) d.resize(); });
+    requestAnimationFrame(() => d.canvas.classList.add("on"));
+  }).catch((e) => console.warn("diorama unavailable, keeping the glyph hero", e)), { timeout: 2000 });
+  if (document.readyState === "complete") go(); else addEventListener("load", go, { once: true });
 }
 
 /* ---------- scan: glyphs resolve into the clear render as the section scrolls past ---------- */
@@ -323,6 +349,7 @@ function startStats() {
 // canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
 const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
 startHero(fontsReady);
+startDiorama();
 startScan(fontsReady);
 startChat();
 startViewAs();
