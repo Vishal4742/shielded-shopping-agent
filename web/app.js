@@ -79,75 +79,6 @@ function loadImage(src) {
   return img.decode().then(() => img);
 }
 
-/* ---------- hero: 96 frame turntable from a 12 x 8 sprite sheet ---------- */
-const SPRITE = { cols: 12, rows: 8, w: 200, h: 250, frames: 96, fps: 24 };
-const DEVELOP_MS = 900;
-
-function startHero(fontsReady) {
-  const canvas = $("#hero-canvas"), cap = $("#hero-cap");
-  if (!canvas) return;
-  Promise.all([loadImage("sprite.jpg"), fontsReady]).then(([sprite]) => {
-    const r = makeGlyphRenderer(canvas);
-    const frameAt = (k) => [(k % SPRITE.cols) * SPRITE.w, Math.floor(k / SPRITE.cols) * SPRITE.h];
-    const paint = (k, rowLimit) => { const [sx, sy] = frameAt(k); return r.draw(sprite, sx, sy, SPRITE.w, SPRITE.h, rowLimit); };
-    cap.textContent = "A phone with a paid ₹10 recharge receipt, drawn in text characters";
-
-    if (reduced) {
-      paint(0);
-      addEventListener("resize", () => { r.resize(); paint(0); });
-      return;
-    }
-    let running = false, raf = 0, t0 = performance.now(), lastFrame = -1;
-    const tick = (now) => {
-      const elapsed = now - t0;
-      const k = Math.floor((elapsed / 1000) * SPRITE.fps) % SPRITE.frames;
-      const developing = elapsed < DEVELOP_MS;
-      if (k !== lastFrame || developing) {
-        const p = clamp01(elapsed / DEVELOP_MS), eased = 1 - Math.pow(1 - p, 3);
-        paint(k, developing ? Math.ceil(r.rows * eased) : Infinity);
-        lastFrame = k;
-      }
-      if (running) raf = requestAnimationFrame(tick);
-    };
-    const play = (on) => {
-      on = on && !heroRetired;
-      if (on === running) return;
-      running = on;
-      if (on) raf = requestAnimationFrame(tick); else cancelAnimationFrame(raf);
-    };
-    let inView = true;
-    onVisible(canvas, (v) => { inView = v; play(v && !document.hidden); });
-    document.addEventListener("visibilitychange", () => play(inView && !document.hidden));
-    addEventListener("resize", () => { r.resize(); lastFrame = -1; });
-    retireHero = () => { heroRetired = true; play(false); };
-  }).catch(() => { cap.textContent = "The artwork failed to load. Reload the page to try again."; });
-}
-
-/* ---------- hero upgrade: live 3D ASCII diorama (diorama/diorama.js), loaded after first paint.
-   The sprite hero above stays as the fallback: no WebGL2, narrow screens, reduced motion, or any load error. */
-let heroRetired = false, retireHero = () => { heroRetired = true; };
-function startDiorama() {
-  const fig = $(".art"), old = $("#hero-canvas"), cap = $("#hero-cap");
-  if (!fig || reduced || innerWidth < 640 || !document.createElement("canvas").getContext("webgl2")) return;
-  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
-  const go = () => idle(() => import("./diorama/diorama.js").then((m) => m.start(fig)).then((d) => {
-    d.canvas.className = "diorama";
-    d.canvas.setAttribute("aria-hidden", "true");
-    fig.insertBefore(d.canvas, cap);
-    fig.setAttribute("aria-label", "A Mumbai street corner at dusk drawn in moving text glyphs: coins drift from a shielded vault to an orange-awning recharge kiosk");
-    retireHero();
-    old.style.display = "none";
-    cap.textContent = "Your agent pays the recharge kiosk from a shielded budget, inside fixed limits.";
-    $("#tags-phone").hidden = true; $("#tags-dio").hidden = false;
-    let inView = true;
-    onVisible(fig, (v) => { inView = v; d.play(v && !document.hidden); });
-    document.addEventListener("visibilitychange", () => d.play(inView && !document.hidden));
-    addEventListener("resize", () => { if (innerWidth >= 640) d.resize(); });
-    requestAnimationFrame(() => d.canvas.classList.add("on"));
-  }).catch((e) => console.warn("diorama unavailable, keeping the glyph hero", e)), { timeout: 2000 });
-  if (document.readyState === "complete") go(); else addEventListener("load", go, { once: true });
-}
-
 /* ---------- scan: glyphs resolve into the clear render as the section scrolls past ---------- */
 function startScan(fontsReady) {
   const canvas = $("#scan-canvas"), img = $("#scan-solid"), cap = $("#scan-cap");
@@ -341,11 +272,91 @@ function startStats() {
   run();
 }
 
+/* ---------- report: Telegram Login Widget → GET {STATS_URL}/me with the signed fields ---------- */
+const TG_FIELDS = ["id", "first_name", "last_name", "username", "photo_url", "auth_date", "hash"];
+const STATE_LABEL = {
+  DELIVERED: ["Delivered", "ok"], RECEIPT_SENDING: ["Delivered", "ok"], RECEIPTED: ["Delivered", "ok"],
+  CONFIRMED: ["In progress", "wait"], PURCHASING: ["In progress", "wait"],
+  UNCERTAIN: ["Checking with Bitrefill", "wait"], FAILED: ["Failed, refunded", "bad"],
+};
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const istTime = (ts) => new Date(ts * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const opName = (op) => ({ jio: "Jio", airtel: "Airtel", vi: "Vi" })[op] || op;
+
+function startReport() {
+  const host = $("#tg-login"), out = $("#report-out");
+  if (!host) return;
+  const base = (window.SSA_CONFIG && window.SSA_CONFIG.STATS_URL || "").replace(/\/$/, "");
+  const say = (...nodes) => out.replaceChildren(...nodes);
+  const showWidget = () => {
+    if (!base) { say(el("p", "note", "Reports need the live link to the bot, and it's offline right now. Send /report to the bot in Telegram instead.")); return; }
+    const s = document.createElement("script");
+    s.async = true;
+    s.src = "https://telegram.org/js/telegram-widget.js?22";
+    s.dataset.telegramLogin = "zcashdemo_bot";
+    s.dataset.size = "large";
+    s.dataset.radius = "8";
+    s.dataset.authUrl = location.origin + location.pathname;
+    s.onerror = () => say(el("p", "note", "The Telegram login button didn't load. Check your connection and reload."));
+    host.replaceChildren(s);
+  };
+  const render = (me, who) => {
+    if (!me.registered) {
+      say(el("p", "hello", `Hi ${who}.`), el("p", "note", "This Telegram account isn't on the invite list yet. Get an invite code at our table, then send /start CODE to @zcashdemo_bot."));
+      return;
+    }
+    const nodes = [el("p", "hello", `Hi ${who}. Here are your latest recharges.`)];
+    if (!me.orders.length) nodes.push(el("p", "note", "No recharges yet. Send /auto jio <number> 10 weekly in Telegram to set up your first one."));
+    else {
+      const list = el("ul", "report-list");
+      me.orders.forEach((o) => {
+        const [label, tone] = STATE_LABEL[o.status] || [o.status, "wait"];
+        const li = el("li");
+        li.append(el("span", "what", `${opName(o.operator)} ₹${o.inr} → ${o.phone}`),
+          el("span", `state ${tone}`, label),
+          el("span", "meta", `${istTime(o.at)}${o.receipt ? " · shielded receipt sent" : ""}`));
+        list.append(li);
+      });
+      nodes.push(list);
+    }
+    if (me.rules.length) {
+      nodes.push(el("h3", null, "Auto-pay rules"));
+      const list = el("ul", "report-list");
+      me.rules.forEach((r) => {
+        const li = el("li");
+        li.append(el("span", "what", `#${r.id} · ${opName(r.operator)} ₹${r.inr} → ${r.phone}`), el("span", "state ok", "On"), el("span", "meta", r.every));
+        list.append(li);
+      });
+      nodes.push(list);
+    }
+    const out_ = el("button", "btn-link", "Log out");
+    out_.type = "button";
+    out_.addEventListener("click", () => { say(); showWidget(); });
+    nodes.push(out_);
+    say(...nodes);
+  };
+
+  const params = new URLSearchParams(location.search);
+  if (!(params.has("hash") && params.has("id"))) { showWidget(); return; }
+  // Came back from Telegram: keep only the signed fields (in memory, never stored), then clean the address bar.
+  const q = new URLSearchParams(TG_FIELDS.filter((k) => params.has(k)).map((k) => [k, params.get(k)]));
+  const who = params.get("first_name") || "there";
+  history.replaceState(null, "", location.pathname + "#report");
+  $("#report").scrollIntoView();
+  if (!base) { showWidget(); return; }
+  say(el("p", "note", "Loading your recharges…"));
+  fetch(`${base}/me`, { cache: "no-store", headers: { Authorization: `tg ${q}` } })
+    .then((r) => (r.status === 401 ? Promise.reject(new Error("login")) : r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then((me) => render(me, who))
+    .catch((e) => {
+      say(el("p", "note", e.message === "login" ? "That login expired (they last an hour). Log in again." : "Couldn't reach the bot right now. Try again in a minute, or send /report in Telegram."));
+      showWidget();
+    });
+}
+
 /* ---------- boot ---------- */
 // canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
 const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
-startHero(fontsReady);
-startDiorama();
 startScan(fontsReady);
 startChat();
 startViewAs();
@@ -353,3 +364,4 @@ startReveals();
 startTagline();
 startCopy();
 startStats();
+startReport();

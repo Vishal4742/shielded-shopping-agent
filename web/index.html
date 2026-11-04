@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://*.trycloudflare.com; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; connect-src 'self' https://*.trycloudflare.com; img-src 'self' data:">
 <title>Shielded Shopping Agent · phone recharges on autopilot, paid with shielded Zcash</title>
 <meta name="description" content="Approve one rule in Telegram and an agent buys real Jio, Airtel or Vi recharges on schedule, inside limits enforced in code. Every purchase leaves a shielded receipt only your viewing key can read.">
 <meta property="og:title" content="Recharge on autopilot. Leave no trail.">
@@ -22,7 +22,7 @@
 
 <nav class="nav" aria-label="Main">
   <a class="brand" href="#top" aria-current="page"><span class="mark" aria-hidden="true">#</span>Shielded Shopping</a>
-  <span class="links"><a href="#how">How it works</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
+  <span class="links"><a href="#how">How it works</a><a href="#report">My recharges</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
   <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener" aria-label="Open in Telegram"><span>Open<span class="xs-hide"> in Telegram</span></span></a>
 </nav>
 
@@ -47,55 +47,33 @@
         <div><dt>Before each run</dt><dd class="mono">skip or stop</dd></div>
       </dl>
     </div>
-    <figure class="art">
-      <canvas id="hero-canvas" aria-hidden="true"></canvas>
-      <ul class="tags" id="tags-phone">
-        <li class="t-paid">₹10 recharge · paid ✓</li>
-        <li class="t-receipt">Receipt: shielded, for your key only</li>
-      </ul>
-      <ul class="tags" id="tags-dio" hidden>
-        <li class="t-coins">₹10 every week</li>
-        <li class="t-vault">Your budget · shielded ZEC</li>
-        <li class="t-kiosk">Jio recharge via Bitrefill</li>
-        <li class="t-limits">Limits: ₹50 an order · ₹100 a day</li>
-      </ul>
-      <figcaption id="hero-cap">A phone with a paid ₹10 recharge receipt, drawn in text characters</figcaption>
-    </figure>
+    <div class="chat hero-chat" role="img" aria-label="Telegram chat: you send /auto jio 98xxxxxx10 10 weekly, the bot shows the rule and its limits, you tap Allow auto-pay, a minute before a run the bot offers Skip and Stop, then reports Top-up successful and a shielded receipt">
+      <div class="chat-bar"><span class="chat-avatar mono" aria-hidden="true">#</span><span><b>Shielded Shopping</b><small>bot</small></span></div>
+      <div class="chat-body" id="chat" aria-hidden="true">
+        <p class="msg me" data-step="0">/auto jio 98xxxxxx10 10 weekly</p>
+        <div class="msg bot" data-step="1">
+          <p><b>🤖 New auto-pay rule</b></p>
+          <p>Jio ₹10 → 98xxxx…10, every week</p>
+          <p class="small">Limits: ₹10 to ₹50 a run · ₹100 a day</p>
+          <div class="msg-buttons"><span class="tg-btn" data-press>✅ Allow auto-pay</span><span class="tg-btn">❌ Cancel</span></div>
+        </div>
+        <p class="msg bot" data-step="2">✅ Auto-pay #1 is on. /rules shows it, /stop 1 ends it.</p>
+        <div class="msg bot" data-step="3">
+          <p>⏰ Auto-pay in about a minute: Jio ₹10 → 98xxxx…10</p>
+          <div class="msg-buttons"><span class="tg-btn">⏭ Skip this one</span><span class="tg-btn">🛑 Stop rule</span></div>
+        </div>
+        <div class="msg bot" data-step="4">
+          <p><b>✅ Top-up successful</b></p>
+          <p class="small">Jio ₹10 → 98xxxx…10 · Ref 3f9a…</p>
+        </div>
+        <p class="msg note" data-step="5">🔒 Shielded receipt sent · only your /viewkey reads it</p>
+      </div>
+    </div>
   </div>
 </header>
 
 <main id="main">
 
-  <section class="demo reveal" aria-labelledby="demo-h">
-    <div class="wrap demo-grid">
-      <div class="section-head">
-        <p class="eyebrow mono">Auto-pay</p>
-        <h2 id="demo-h">Approve the rule once. The agent handles every run after that.</h2>
-        <p class="lead">Send one command. The bot shows you the rule and its limits and waits for your tap. From then on it buys on its own, and a minute before each run it gives you the chance to skip.</p>
-      </div>
-      <div class="chat" role="img" aria-label="Chat: you send /auto jio 98xxxxxx10 10 weekly, the bot shows the rule with limits, you tap Allow auto-pay, the bot warns a minute before a run with Skip and Stop, then confirms the recharge and sends a shielded receipt">
-        <div class="chat-bar"><span class="chat-avatar mono" aria-hidden="true">#</span><span><b>Shielded Shopping</b><small>bot</small></span></div>
-        <div class="chat-body" id="chat" aria-hidden="true">
-          <p class="msg me" data-step="0">/auto jio 98xxxxxx10 10 weekly</p>
-          <div class="msg bot" data-step="1">
-            <p>New rule: Jio ₹10 to 98xxxx…10, every week</p>
-            <p class="mono small">Limits: ₹10 to ₹50 a run · ₹100 a day</p>
-            <div class="msg-buttons"><span class="tg-btn" data-press>✓ Allow auto-pay</span><span class="tg-btn">Cancel</span></div>
-          </div>
-          <p class="msg bot" data-step="2">Auto-pay #1 is on. /rules shows it, /stop 1 ends it.</p>
-          <div class="msg bot" data-step="3">
-            <p>Rule 1 buys Jio ₹10 in one minute.</p>
-            <div class="msg-buttons"><span class="tg-btn">Skip this one</span><span class="tg-btn">Stop rule</span></div>
-          </div>
-          <div class="msg bot" data-step="4">
-            <p><b>Recharge delivered</b></p>
-            <p class="mono small">Jio ₹10 → 98xxxx…10 · rule 1 · Ref 3f9a…</p>
-          </div>
-          <p class="msg note mono" data-step="5">Shielded receipt sent · open it with /viewkey</p>
-        </div>
-      </div>
-    </div>
-  </section>
 
   <section class="scan reveal" aria-labelledby="scan-h">
     <div class="wrap scan-grid">
@@ -215,6 +193,22 @@
     </div>
   </section>
 
+  <section class="report reveal" id="report" aria-labelledby="report-h">
+    <div class="wrap">
+      <div class="panel crop report-panel">
+        <div class="report-head">
+          <div>
+            <p class="eyebrow mono">Your recharges</p>
+            <h2 id="report-h">Log in with Telegram to see yours.</h2>
+            <p class="muted">Your purchases, their status and your auto-pay rules. Telegram signs the login, so only you see your list. Phone numbers stay masked.</p>
+          </div>
+          <div class="tg-login" id="tg-login"></div>
+        </div>
+        <div class="report-out" id="report-out" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="tagline" aria-label="Tagline">
     <div class="wrap">
       <p class="tag-text" id="tagline">Approve one rule. Code holds the limits. Only your key reads the receipts.</p>
@@ -288,7 +282,6 @@
       <p class="foot-label mono">Legal</p>
       <p>This page sets no cookies and loads nothing from other sites.</p>
       <p>Not affiliated with or endorsed by the Zcash Foundation or Electric Coin Co.</p>
-      <p>Hero diorama built on <a href="https://github.com/JDhruv14/ascii-diorama" rel="noopener">ascii-diorama</a> by JDhruv14 (MIT) and three.js (MIT).</p>
     </div>
   </div>
   <p class="wordmark" aria-hidden="true">Shielded</p>

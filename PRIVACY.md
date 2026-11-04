@@ -16,6 +16,7 @@ This is a testnet demo, built in a day. Read this to see who learns what when yo
 | **Us (the operator)** | Everything: your Telegram id, the phone number you top up, every order, your balance, and your keys. We run a custodial wallet. Privacy here is against the public and the merchant, **not** against us. |
 | **Bitrefill** | The phone number, operator and amount of each top-up, tied to our account (not yours). |
 | **Telegram** | Your chat with the bot, including the phone number and amounts you type. |
+| **Whoever holds your website login, for 1 hour** | Logging in with Telegram on the website shows your last 20 orders (masked phone, operator, amount, status) and your auto-pay rules. The signed login is kept in the page's memory and sent in a request header, not the URL, and the bot refuses it after an hour. Telegram also sees that you logged in to our site. |
 | **Anthropic** | The text of messages we send for intent parsing ("₹20 Jio to 98…"). |
 | **testnet.zec.rocks** (lightwalletd) | Our server's IP address and when and how often we sync. With `SSA_TOR=1` it sees a Tor exit instead of our IP (see Tor below). `/report` and `ssa audit` always connect directly. |
 | **NEAR Intents 1Click and the chain, on a ZEC refill** | The amount of that one transparent transfer, the deposit address, and the Bitrefill address it is swapped to (see Refilling below). |

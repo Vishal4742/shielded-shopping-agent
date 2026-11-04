@@ -9,6 +9,8 @@ license = "MIT"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dotenvy = "0.15"
+hex = "0.4"
+hmac = "0.12"
 image = { version = "0.25", default-features = false, features = ["png"] }
 qrcode = "0.14"
 # reqwest 0.12 matches teloxide-core's copy, so only one compiles (notes/stack.md)
@@ -16,9 +18,11 @@ reqwest = { version = "0.12", features = ["json"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
 teloxide = { version = "0.17", features = ["macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "net", "io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
 uuid = { version = "1", features = ["v4"] }

@@ -731,6 +731,18 @@ impl Db {
         Ok(n == 1)
     }
 
+    /// A user's latest purchases for the website report: quotes never bought are left out.
+    pub fn recent_orders(&self, tg_id: i64, limit: i64) -> Result<Vec<Order>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ORDER_COLS} FROM orders WHERE tg_id = ?1 \
+             AND status NOT IN ('QUOTED', 'EXPIRED', 'CANCELLED') \
+             ORDER BY created_at DESC, id LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![tg_id, limit], order_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn active_rules(&self, tg_id: i64) -> Result<Vec<Rule>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(&format!(

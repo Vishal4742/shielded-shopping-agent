@@ -293,6 +293,14 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
 
 async fn serve_connection(app: Arc<App>, mut stream: TcpStream) -> std::io::Result<()> {
     let request = read_request(&mut stream).await?;
+    match me_route(&request) {
+        Some(MeRoute::Preflight) => return stream.write_all(PREFLIGHT.as_bytes()).await,
+        Some(MeRoute::Get(login)) => {
+            let response = me_response(&app, login, now_ts());
+            return stream.write_all(response.as_bytes()).await;
+        }
+        None => {}
+    }
     let response = build_response(&request, || {
         let (start, end) = ist_day(now_ts());
         Ok((app.db.stats(start, end)?, config::paused(&app.env_path)))
@@ -301,6 +309,97 @@ async fn serve_connection(app: Arc<App>, mut stream: TcpStream) -> std::io::Resu
 }
 
 const MAX_STATS_CONNECTIONS: usize = 32;
+const REPORT_ORDERS: i64 = 20;
+
+// ---------------------------------------------------------------------------------------------
+// GET /me with `Authorization: tg <Telegram Login Widget fields>`: the signed-in user's own
+// purchases and rules. The login rides in a header, not the URL, so it stays out of tunnel and
+// proxy logs; the custom header makes browsers send a CORS preflight first.
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Eq)]
+enum MeRoute<'a> {
+    Preflight,
+    /// The URL-encoded login fields (empty if the header is missing).
+    Get(&'a str),
+}
+
+const PREFLIGHT: &str = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\n\
+     Access-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Authorization\r\n\
+     Access-Control-Max-Age: 600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+fn me_route(request: &str) -> Option<MeRoute<'_>> {
+    let mut lines = request.lines();
+    let mut parts = lines.next()?.split_whitespace();
+    let (method, target) = (parts.next()?, parts.next()?);
+    if target.split('?').next() != Some("/me") {
+        return None;
+    }
+    match method {
+        "OPTIONS" => Some(MeRoute::Preflight),
+        "GET" => {
+            let login = lines
+                .take_while(|l| !l.is_empty())
+                .filter_map(|l| l.split_once(':'))
+                .find(|(k, _)| k.trim().eq_ignore_ascii_case("authorization"))
+                .and_then(|(_, v)| v.trim().strip_prefix("tg "))
+                .unwrap_or("");
+            Some(MeRoute::Get(login.trim()))
+        }
+        _ => None,
+    }
+}
+
+fn me_response(app: &App, query: &str, now: i64) -> String {
+    let Some(tg_id) = crate::tglogin::verify(query, &app.cfg.telegram_bot_token, now) else {
+        return http_response(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"error":"login"}"#,
+        );
+    };
+    match me_body(app, tg_id) {
+        Ok(body) => http_response("200 OK", "application/json", &body),
+        Err(e) => {
+            tracing::warn!(error = %e, "report query failed");
+            http_response(
+                "500 Internal Server Error",
+                "application/json",
+                r#"{"error":"server"}"#,
+            )
+        }
+    }
+}
+
+fn me_body(app: &App, tg_id: i64) -> anyhow::Result<String> {
+    if app.db.get_user(tg_id)?.is_none() {
+        return Ok(r#"{"registered":false}"#.into());
+    }
+    let orders: Vec<_> = app
+        .db
+        .recent_orders(tg_id, REPORT_ORDERS)?
+        .iter()
+        .map(|o| {
+            serde_json::json!({
+                "at": o.created_at, "operator": o.operator, "inr": o.inr, "status": o.status,
+                "phone": crate::bitrefill::mask_phone(&o.phone), "receipt": o.receipt_txid.is_some(),
+            })
+        })
+        .collect();
+    let rules: Vec<_> = app
+        .db
+        .active_rules(tg_id)?
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id, "operator": r.operator, "inr": r.inr,
+                "every": crate::autopay::every_label(r.every_secs),
+                "phone": crate::bitrefill::mask_phone(&r.phone),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "registered": true, "orders": orders, "rules": rules }).to_string())
+}
 
 /// Serves `GET /stats.json` on `addr` until the process exits. A bind failure is logged and ends
 /// only this task.
@@ -350,6 +449,72 @@ mod tests {
     const USER_TEST: &str = "d87ee4a6-ea65-4258-b903-713b7ba04ede";
     const FAUCET_TXID: &str = "752751150345164f641417ef6c02160c969e03818b25ee71b37174ab306b54ca";
     const TREASURY_TXID: &str = "3a999d11cf252c8469253e18760cac2de18398803cc91b00b077fe95f24a8a90";
+
+    fn report_app() -> App {
+        let env: std::collections::HashMap<&str, &str> = [
+            ("TELEGRAM_BOT_TOKEN", "123:tok"),
+            ("BITREFILL_API_KEY", "k"),
+            ("ANTHROPIC_API_KEY", "a"),
+            ("SSA_TREASURY_UA", "utest1treasury"),
+        ]
+        .into();
+        let cfg =
+            crate::config::Config::from_lookup(|k| env.get(k).map(|v| v.to_string())).unwrap();
+        let db = crate::db::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        App {
+            cfg,
+            env_path: "/nonexistent/.env".into(),
+            db: Arc::new(db),
+            zec: Arc::new(crate::zec::Zec::new(
+                "/x".into(),
+                "/x".into(),
+                "/x".into(),
+                false,
+            )),
+            bitrefill: crate::bitrefill::Bitrefill::new("http://127.0.0.1:9", "k", true).unwrap(),
+            prices: crate::price::PriceCache::new().unwrap(),
+        }
+    }
+
+    #[test]
+    fn me_route_needs_a_genuine_login_and_a_member() {
+        let app = report_app();
+        let now = 1_800_000_000;
+        let signed = |id: &str| {
+            crate::tglogin::sign(&[("id", id), ("auth_date", &now.to_string())], "123:tok")
+        };
+        assert!(me_response(&app, &signed("7"), now).contains("\"registered\":false"));
+        assert!(
+            me_response(&app, &signed("7").replace("id=7", "id=8"), now)
+                .starts_with("HTTP/1.1 401")
+        );
+        app.db.add_invite("I", 1).unwrap();
+        app.db.admit("I", 7, None, 0).unwrap();
+        let ok = me_response(&app, &signed("7"), now);
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+        assert!(
+            ok.contains("\"orders\":[]") && ok.contains("\"rules\":[]"),
+            "{ok}"
+        );
+    }
+
+    #[test]
+    fn me_route_reads_the_login_from_the_header_only() {
+        let get = "GET /me HTTP/1.1\r\nHost: x\r\nauthorization: tg id=1&hash=ab\r\n\r\n";
+        assert_eq!(me_route(get), Some(MeRoute::Get("id=1&hash=ab")));
+        let in_url = "GET /me?id=1&hash=ab HTTP/1.1\r\n\r\n";
+        assert_eq!(me_route(in_url), Some(MeRoute::Get("")));
+        let in_body = "GET /me HTTP/1.1\r\n\r\nAuthorization: tg id=1\r\n";
+        assert_eq!(me_route(in_body), Some(MeRoute::Get("")));
+        assert_eq!(
+            me_route("OPTIONS /me HTTP/1.1\r\n\r\n"),
+            Some(MeRoute::Preflight)
+        );
+        assert_eq!(me_route("POST /me HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(me_route("GET /stats.json HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(me_route("GET /meow HTTP/1.1\r\n\r\n"), None);
+    }
 
     #[test]
     fn user_gets_faucet_tx_and_nothing_for_internal_transfer() {
