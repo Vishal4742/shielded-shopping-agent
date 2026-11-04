@@ -17,3 +17,5 @@ reports/
 AGENTS.md
 CLAUDE.md
 .wrangler/
+.vercel
+.env*
