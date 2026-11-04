@@ -3,7 +3,7 @@
 //! and money rules live in those modules. The LLM output is an `Intent`, never a purchase.
 //! Message wording follows design §9.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
@@ -52,6 +52,25 @@ const MSG_VIEWKEY_HELP: &str = "Read-only: it shows your deposits and receipts, 
 
 /// Chats already told to DM us, so a busy group is answered once.
 static NOTICED_GROUPS: Mutex<BTreeSet<i64>> = Mutex::new(BTreeSet::new());
+/// Wrong invite codes per Telegram id; after 5 the id gets no more guesses (threat model T15).
+/// ponytail: in memory, so a restart clears it and a guesser can rotate accounts; move it to
+/// SQLite with a global counter if the bot stays public after the event.
+static BAD_INVITES: Mutex<BTreeMap<i64, u32>> = Mutex::new(BTreeMap::new());
+const MAX_BAD_INVITE_TRIES: u32 = 5;
+
+fn bad_invite_tries(tg_id: i64) -> u32 {
+    BAD_INVITES
+        .lock()
+        .map(|m| m.get(&tg_id).copied().unwrap_or(0))
+        .unwrap_or(MAX_BAD_INVITE_TRIES)
+}
+
+fn note_bad_invite(tg_id: i64) {
+    if let Ok(mut m) = BAD_INVITES.lock() {
+        *m.entry(tg_id).or_insert(0) += 1;
+    }
+}
+
 /// Serialises wallet creation so a double `/start` cannot make two accounts for one user.
 static WALLET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -165,9 +184,14 @@ async fn cmd_start(
 ) -> anyhow::Result<()> {
     let tg_id = tg_id_of(from);
     if !app.db.is_user(tg_id)? {
-        let admitted =
-            !invite.is_empty() && app.db.admit(invite, tg_id, from.username.as_deref(), now)?;
+        let locked_out = bad_invite_tries(tg_id) >= MAX_BAD_INVITE_TRIES;
+        let admitted = !locked_out
+            && !invite.is_empty()
+            && app.db.admit(invite, tg_id, from.username.as_deref(), now)?;
         if !admitted {
+            if !locked_out && !invite.is_empty() {
+                note_bad_invite(tg_id);
+            }
             return send(bot, chat, MSG_NOT_ALLOWED.to_owned()).await;
         }
     }
@@ -333,7 +357,14 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
                 Ok(outcome) => buy_text(&outcome, now),
                 Err(e) => {
                     log_error(app, "confirm_and_buy failed", &e);
-                    MSG_ERROR.to_owned()
+                    // Past QUOTED the budget was debited and an invoice may exist, so
+                    // "nothing was bought" could be false. Say we're checking instead.
+                    match app.db.get_order(order_id) {
+                        Ok(Some(order)) if order.status != "QUOTED" => {
+                            buy_text(&BuyOutcome::Uncertain(order), now)
+                        }
+                        _ => MSG_ERROR.to_owned(),
+                    }
                 }
             };
             finish_card(bot, app, chat, card_id, text).await;
