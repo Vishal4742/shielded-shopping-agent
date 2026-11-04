@@ -113,10 +113,8 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .facts dd { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
 
 .art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
-.art img { display: block; width: 100%; height: 100%; border-radius: 12px; animation: float 6s var(--ease) infinite alternate; }
-@keyframes float { to { transform: translateY(-12px); } }
-.scan-fig canvas { display: block; width: 100%; height: 100%; }
-.art figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+.art canvas, .scan-fig canvas { display: block; width: 100%; height: 100%; }
+.art figcaption { position: absolute; left: 0; right: 0; top: calc(100% + 8px); font-size: 14px; line-height: 20px; color: var(--text-2); text-wrap: balance; }
 
 /* corner crop marks: 8 flat segments in one layer */
 .crop { position: relative; }
@@ -300,5 +298,4 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal, .msg { transform: none !important; transition: opacity 300ms linear; }
-  .art img { animation: none; }
 }
