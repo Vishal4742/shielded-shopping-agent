@@ -48,6 +48,9 @@ const MSG_REPORT_WORKING: &str = "Building your report from your viewing key alo
 const MSG_ERROR_REPORT: &str =
     "I couldn't build the report right now. Nothing was changed; try again in a minute.";
 const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 to pick a recharge,\nor jio 9876543210 10 (operator, phone number, rupees). /help for more.";
+const MSG_SLOW_DOWN: &str = "That's a lot of messages. I'll be back for you in a minute.";
+const MSG_REPORT_COOLDOWN: &str = "You can build one report every 2 minutes. Try again shortly.";
+const MSG_REPORT_BUSY: &str = "Another report is being built right now. Try again in a minute.";
 const MSG_MENU: &str = "What would you like to do?";
 const MSG_RECHARGE: &str = "Send the operator and the phone number, e.g. jio 9876543210, and I'll show the recharges you can pick.\nOr add the amount: jio 9876543210 10";
 const MSG_NO_RECEIPTS: &str =
@@ -82,6 +85,33 @@ fn note_bad_invite(tg_id: i64) {
         *m.entry(tg_id).or_insert(0) += 1;
     }
 }
+
+/// Flood guard: at most MAX_UPDATES_PER_MIN messages or taps per Telegram id per minute.
+/// ponytail: fixed one-minute window in memory, wiped at 10,000 ids; fine for one process.
+static RECENT_UPDATES: Mutex<BTreeMap<i64, (i64, u32)>> = Mutex::new(BTreeMap::new());
+const MAX_UPDATES_PER_MIN: u32 = 20;
+const MAX_TRACKED_IDS: usize = 10_000;
+
+/// How many updates this id has sent in the current minute, this one included.
+fn count_update(tg_id: i64, now: i64) -> u32 {
+    let mut seen = RECENT_UPDATES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if seen.len() > MAX_TRACKED_IDS {
+        seen.clear();
+    }
+    let entry = seen.entry(tg_id).or_insert((now, 0));
+    if now - entry.0 >= 60 {
+        *entry = (now, 0);
+    }
+    entry.1 += 1;
+    entry.1
+}
+
+/// One `/report` at a time (each runs four devtool processes) and one per user every 2 min.
+static REPORT_RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static LAST_REPORT: Mutex<BTreeMap<i64, i64>> = Mutex::new(BTreeMap::new());
+const REPORT_COOLDOWN_SECS: i64 = 120;
 
 /// Serialises wallet creation so a double `/start` cannot make two accounts for one user.
 static WALLET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -158,6 +188,14 @@ async fn handle_message(
         return Ok(());
     };
     let tg_id = tg_id_of(from);
+    let count = count_update(tg_id, now);
+    if count > MAX_UPDATES_PER_MIN {
+        // Say it once per minute, then stay silent so a flood costs us nothing.
+        if count == MAX_UPDATES_PER_MIN + 1 {
+            send(bot, chat, MSG_SLOW_DOWN.to_owned()).await?;
+        }
+        return Ok(());
+    }
     match parse_command(text) {
         Some(("start", arg)) => cmd_start(bot, app, chat, from, arg, now).await,
         Some(("help", _)) => send_with_menu(bot, chat, help_text()).await,
@@ -181,10 +219,15 @@ async fn send(bot: &Bot, chat: ChatId, text: String) -> anyhow::Result<()> {
 }
 
 async fn notify_group(bot: &Bot, chat: ChatId) -> anyhow::Result<()> {
-    let first_time = NOTICED_GROUPS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(chat.0);
+    let first_time = {
+        let mut groups = NOTICED_GROUPS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if groups.len() > MAX_TRACKED_IDS {
+            groups.clear();
+        }
+        groups.insert(chat.0)
+    };
     if first_time {
         send(bot, chat, MSG_GROUP.to_owned()).await?;
     }
@@ -620,6 +663,9 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     }
     let (chat, card_id) = (card.chat().id, card.id());
     let tg_id = tg_id_of(&q.from);
+    if count_update(tg_id, now) > MAX_UPDATES_PER_MIN {
+        return Ok(());
+    }
     let rule_id = || order_id.parse::<i64>().ok();
     match action {
         Action::Menu => menu_action(bot, app, chat, tg_id, order_id).await?,
@@ -710,7 +756,26 @@ async fn cmd_report(bot: &Bot, app: &App, chat: ChatId, tg_id: i64) -> anyhow::R
     let Some(account) = app.zec.account(&uuid).await? else {
         return send(bot, chat, MSG_ERROR_REPORT.to_owned()).await;
     };
-    let birthday = account.birthday.unwrap_or(0);
+    // No birthday would mean scanning from block 0; refuse instead of running for 40 minutes.
+    let Some(birthday) = account.birthday else {
+        return send(bot, chat, MSG_ERROR_REPORT.to_owned()).await;
+    };
+    let now = chrono::Utc::now().timestamp();
+    let last = LAST_REPORT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&tg_id)
+        .copied();
+    if last.is_some_and(|t| now - t < REPORT_COOLDOWN_SECS) {
+        return send(bot, chat, MSG_REPORT_COOLDOWN.to_owned()).await;
+    }
+    let Ok(_running) = REPORT_RUNNING.try_lock() else {
+        return send(bot, chat, MSG_REPORT_BUSY.to_owned()).await;
+    };
+    LAST_REPORT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(tg_id, now);
     send(bot, chat, MSG_REPORT_WORKING.to_owned()).await?;
     let lines = match audit::audit(&app.cfg.devtool, &account.ufvk, birthday).await {
         Ok(lines) => lines,
@@ -1116,6 +1181,17 @@ fn quote_keyboard(order_id: &str) -> InlineKeyboardMarkup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flood_guard_counts_per_id_per_minute() {
+        let id = -424_242;
+        for n in 1..=MAX_UPDATES_PER_MIN {
+            assert_eq!(count_update(id, 1_000), n);
+        }
+        assert!(count_update(id, 1_030) > MAX_UPDATES_PER_MIN, "same minute");
+        assert_eq!(count_update(id, 1_060), 1, "a new minute starts over");
+        assert_eq!(count_update(id - 1, 1_000), 1, "other ids are separate");
+    }
 
     #[test]
     fn receipt_text_has_every_receipt_field() {
