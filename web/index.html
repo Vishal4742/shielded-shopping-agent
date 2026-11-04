@@ -34,7 +34,7 @@
       <p class="lead">Approve one rule in Telegram and the agent buys real Jio, Airtel or Vi recharges on schedule, inside limits enforced in code. Every purchase leaves a shielded receipt only your viewing key can read.</p>
       <div class="actions">
         <a class="btn btn-primary" href="https://t.me/zcashdemo_bot" rel="noopener">Open in Telegram</a>
-        <a class="btn btn-ghost" href="#how">See how it works</a>
+        <a class="btn btn-ghost" href="#report">Log in with Telegram</a>
       </div>
       <div class="chip mono">
         <span class="chip-label">Bot</span>
@@ -73,6 +73,22 @@
 </header>
 
 <main id="main">
+
+  <section class="report reveal" id="report" aria-labelledby="report-h">
+    <div class="wrap">
+      <div class="panel crop report-panel">
+        <div class="report-head">
+          <div>
+            <p class="eyebrow mono">Your recharges</p>
+            <h2 id="report-h">Log in with Telegram to see yours.</h2>
+            <p class="muted">Your purchases, their status and your auto-pay rules. Telegram signs the login, so only you see your list. Phone numbers stay masked.</p>
+          </div>
+          <div class="tg-login" id="tg-login"></div>
+        </div>
+        <div class="report-out" id="report-out" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
 
 
   <section class="scan reveal" aria-labelledby="scan-h">
@@ -193,21 +209,6 @@
     </div>
   </section>
 
-  <section class="report reveal" id="report" aria-labelledby="report-h">
-    <div class="wrap">
-      <div class="panel crop report-panel">
-        <div class="report-head">
-          <div>
-            <p class="eyebrow mono">Your recharges</p>
-            <h2 id="report-h">Log in with Telegram to see yours.</h2>
-            <p class="muted">Your purchases, their status and your auto-pay rules. Telegram signs the login, so only you see your list. Phone numbers stay masked.</p>
-          </div>
-          <div class="tg-login" id="tg-login"></div>
-        </div>
-        <div class="report-out" id="report-out" aria-live="polite"></div>
-      </div>
-    </div>
-  </section>
 
   <section class="tagline" aria-label="Tagline">
     <div class="wrap">
