@@ -22,11 +22,20 @@ struct Token<'a> {
     price: &'a RawValue,
 }
 
+pub const ZEC_ASSET: &str = "nep141:zec.omft.near";
+/// Bitrefill prices our account in BTC (satoshis), so quotes need BTC/USD too.
+pub const BTC_ASSET: &str = "nep141:btc.omft.near";
+const CACHE_SECS: i64 = 60;
+
 pub fn parse_zec_usd_cents(json: &str) -> Result<i64, PriceError> {
+    parse_usd_cents(json, ZEC_ASSET)
+}
+
+pub fn parse_usd_cents(json: &str, asset_id: &str) -> Result<i64, PriceError> {
     let tokens: Vec<Token<'_>> = serde_json::from_str(json)?;
     let raw = tokens
         .iter()
-        .find(|token| token.asset_id == "nep141:zec.omft.near")
+        .find(|token| token.asset_id == asset_id)
         .ok_or(PriceError::InvalidPrice)?
         .price
         .get();
@@ -70,9 +79,17 @@ fn decimal_cents(raw: &str) -> Result<i64, PriceError> {
     i64::try_from(cents).map_err(|_| PriceError::InvalidPrice)
 }
 
+/// USD cents per whole coin, and when they were fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Prices {
+    pub zec_usd_cents: i64,
+    pub btc_usd_cents: i64,
+    pub fetched_at: i64,
+}
+
 pub struct PriceCache {
     client: reqwest::Client,
-    cached: Mutex<Option<(i64, i64)>>,
+    cached: Mutex<Option<Prices>>,
 }
 
 impl PriceCache {
@@ -85,11 +102,11 @@ impl PriceCache {
         })
     }
 
-    pub async fn zec_usd_cents(&self, now: i64) -> Result<(i64, i64), PriceError> {
+    pub async fn prices(&self, now: i64) -> Result<Prices, PriceError> {
         let mut cached = self.cached.lock().await;
-        if let Some((cents, fetched_at)) = *cached {
-            if now >= fetched_at && now - fetched_at < 60 {
-                return Ok((cents, fetched_at));
+        if let Some(p) = *cached {
+            if now >= p.fetched_at && now - p.fetched_at < CACHE_SECS {
+                return Ok(p);
             }
         }
         let body = self
@@ -100,9 +117,13 @@ impl PriceCache {
             .error_for_status()?
             .text()
             .await?;
-        let value = parse_zec_usd_cents(&body)?;
-        *cached = Some((value, now));
-        Ok((value, now))
+        let prices = Prices {
+            zec_usd_cents: parse_usd_cents(&body, ZEC_ASSET)?,
+            btc_usd_cents: parse_usd_cents(&body, BTC_ASSET)?,
+            fetched_at: now,
+        };
+        *cached = Some(prices);
+        Ok(prices)
     }
 }
 
@@ -114,6 +135,7 @@ mod tests {
     fn parses_live_fixture_price_as_cents() {
         let fixture = include_str!("../fixtures/price/tokens.json");
         assert_eq!(parse_zec_usd_cents(fixture).unwrap(), 128_777);
+        assert_eq!(parse_usd_cents(fixture, BTC_ASSET).unwrap(), 7_834_400);
     }
 
     #[test]

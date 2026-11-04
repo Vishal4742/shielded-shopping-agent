@@ -86,9 +86,29 @@ pub fn parse_usd_cents(s: &str) -> Result<i64, QuoteError> {
     Ok(cents)
 }
 
+const SATS_PER_BTC: u128 = 100_000_000;
+
+/// Bitrefill satoshi price → USD cents at `btc_usd_cents` per BTC, rounded UP (never undercharge).
+pub fn sats_to_usd_cents(sats: i64, btc_usd_cents: i64) -> Result<i64, QuoteError> {
+    if sats <= 0 || btc_usd_cents <= 0 {
+        return Err(QuoteError::NonPositiveInput);
+    }
+    let cents = (sats as u128 * btc_usd_cents as u128).div_ceil(SATS_PER_BTC);
+    i64::try_from(cents).map_err(|_| QuoteError::Overflow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sats_to_cents_rounds_up_and_matches_live_jio_10() {
+        // ₹10 Jio talktime was 141 sat with BTC at $78,344 → $0.1105 → 12 cents.
+        assert_eq!(sats_to_usd_cents(141, 7_834_400), Ok(12));
+        assert_eq!(sats_to_usd_cents(100_000_000, 7_834_400), Ok(7_834_400));
+        assert_eq!(sats_to_usd_cents(0, 1), Err(QuoteError::NonPositiveInput));
+        assert_eq!(sats_to_usd_cents(1, -1), Err(QuoteError::NonPositiveInput));
+    }
 
     const NOW: i64 = 1_000_000;
 

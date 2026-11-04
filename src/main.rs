@@ -7,9 +7,11 @@ mod db;
 mod intent;
 mod model;
 mod order_fsm;
+mod orders;
 mod price;
 mod quote;
 mod telegram;
+mod workers;
 mod zec;
 mod zip321;
 

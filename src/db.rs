@@ -465,9 +465,151 @@ impl Db {
     }
 }
 
+/// Aggregates for `GET /stats.json` (FR-16). No per-user data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Stats {
+    pub orders_delivered: i64,
+    pub inr_spent_today: i64,
+    pub receipts_sent: i64,
+}
+
+/// Helpers for the order flow, workers and stats (added on hack day by zcash-3f).
+impl Db {
+    pub fn add_invite(&self, code: &str, uses: i64) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO invites (code, uses_left) VALUES (?1, ?2) \
+             ON CONFLICT(code) DO UPDATE SET uses_left = excluded.uses_left",
+            params![code, uses],
+        )?;
+        Ok(())
+    }
+
+    /// Users that already have a wallet account (sync worker input).
+    pub fn users_with_wallet(&self) -> Result<Vec<User>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT tg_id, tg_username, account_uuid, ufvk, deposit_ua, created_at \
+             FROM users WHERE account_uuid IS NOT NULL ORDER BY tg_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(User {
+                tg_id: r.get(0)?,
+                tg_username: r.get(1)?,
+                account_uuid: r.get(2)?,
+                ufvk: r.get(3)?,
+                deposit_ua: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Orders in `status`, oldest first.
+    pub fn orders_in_status(&self, status: &str) -> Result<Vec<Order>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ORDER_COLS} FROM orders WHERE status = ?1 ORDER BY created_at, id"
+        ))?;
+        let rows = stmt.query_map([status], order_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_invoice(&self, id: &str, invoice: &str, now: i64) -> Result<()> {
+        self.lock().execute(
+            "UPDATE orders SET bitrefill_invoice = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, invoice, now],
+        )?;
+        Ok(())
+    }
+
+    /// Last error for an order. Callers pass messages without secrets or phone numbers.
+    pub fn set_error(&self, id: &str, error: &str, now: i64) -> Result<()> {
+        self.lock().execute(
+            "UPDATE orders SET error = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, error, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_receipt_txid(&self, id: &str, txid: &str, now: i64) -> Result<()> {
+        self.lock().execute(
+            "UPDATE orders SET receipt_txid = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, txid, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn stats(&self, day_start: i64, day_end: i64) -> Result<Stats> {
+        let conn = self.lock();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0));
+        let orders_delivered = count(
+            "SELECT COUNT(*) FROM orders WHERE dry_run = 0 \
+             AND status IN ('DELIVERED','RECEIPT_SENDING','RECEIPTED')",
+        )?;
+        let receipts_sent = count("SELECT COUNT(*) FROM orders WHERE status = 'RECEIPTED'")?;
+        drop(conn);
+        Ok(Stats {
+            orders_delivered,
+            inr_spent_today: self.spent_today_inr(None, day_start, day_end)?,
+            receipts_sent,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hack_day_helpers_round_trip() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_invite("DEMO1", 2).unwrap();
+        assert!(db.admit("DEMO1", 7, None, 1).unwrap());
+        assert!(db.users_with_wallet().unwrap().is_empty());
+        db.set_wallet(7, "uuid-7", "uview", "utest1x").unwrap();
+        assert_eq!(
+            db.users_with_wallet().unwrap()[0].account_uuid.as_deref(),
+            Some("uuid-7")
+        );
+        let o = NewOrder {
+            id: "o1".into(),
+            tg_id: 7,
+            operator: "jio".into(),
+            product_slug: "s".into(),
+            phone: "9876543210".into(),
+            inr: 10,
+            usd_cents: 11,
+            price_zat: 9000,
+            fee_zat: 25000,
+            dry_run: false,
+            quote_expires_at: 600,
+            created_at: 1,
+        };
+        db.insert_quote(&o).unwrap();
+        db.set_invoice("o1", "inv-1", 2).unwrap();
+        db.set_receipt_txid("o1", "tx", 3).unwrap();
+        db.set_error("o1", "boom", 4).unwrap();
+        let got = db.get_order("o1").unwrap().unwrap();
+        assert_eq!(
+            (
+                got.bitrefill_invoice.as_deref(),
+                got.receipt_txid.as_deref(),
+                got.error.as_deref()
+            ),
+            (Some("inv-1"), Some("tx"), Some("boom"))
+        );
+        assert_eq!(db.orders_in_status("QUOTED").unwrap().len(), 1);
+        assert!(db.transition("o1", "QUOTED", "RECEIPTED", 5).unwrap());
+        assert_eq!(
+            db.stats(0, 100).unwrap(),
+            Stats {
+                orders_delivered: 1,
+                inr_spent_today: 10,
+                receipts_sent: 1
+            }
+        );
+    }
 
     const NOW: i64 = 1_000_000;
     const USER: i64 = 7;
