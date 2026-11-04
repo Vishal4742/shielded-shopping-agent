@@ -25,10 +25,11 @@ cd tools/zcash-devtool && git checkout 0b3436b && cargo build --release
 
 ## Where things are
 
-- `docs/`: design baseline. Start at [docs/00-README.md](docs/00-README.md). Read the SRS (`03`) and the detailed design (`05`) before you write code.
-- `notes/`: build log and Phase 0 findings (devtool, Bitrefill, stack versions).
-- `src/`: the bot.
-- `CLAUDE.md` / `AGENTS.md`: conventions for coding agents. They work for humans too.
+- `src/`: the bot (Rust).
+- `web/`: the landing page (static HTML, CSS and JS, no build step). Open `web/index.html` or run `python3 -m http.server -d web`.
+- `.env.example`: every config key the bot reads.
+
+Design docs and research notes live with Vishal, not in this repo. Ask if you need the spec for a feature.
 
 ## Working together
 
