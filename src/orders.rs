@@ -389,6 +389,23 @@ pub fn cancel(app: &App, order_id: &str, tg_id: i64, now: i64) -> anyhow::Result
     }
 }
 
+/// Operator command `ssa refund <ORDER_ID>`: an UNCERTAIN order that never got a Bitrefill
+/// invoice (create_invoice answered 5xx or timed out) becomes FAILED with its REVERSAL.
+/// A 5xx could in theory still have created an invoice, so check Bitrefill's invoice list first.
+pub fn refund_without_invoice(db: &Db, order_id: &str, now: i64) -> anyhow::Result<bool> {
+    let order = reload(db, order_id)?;
+    anyhow::ensure!(
+        order.status == "UNCERTAIN",
+        "order is {}, not UNCERTAIN",
+        order.status
+    );
+    anyhow::ensure!(
+        order.bitrefill_invoice.is_none(),
+        "order has a Bitrefill invoice; resolve_uncertain settles it"
+    );
+    fail_with_refund(db, &order, Event::ResolveFailed, now)
+}
+
 /// UNCERTAIN orders with an invoice: one status check each. Delivered → DELIVERED; failed →
 /// FAILED + refund; anything else stays for the next round. Returns orders that changed.
 pub async fn resolve_uncertain(app: &App) -> anyhow::Result<Vec<Order>> {
