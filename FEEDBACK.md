@@ -20,7 +20,18 @@ What confused or slowed us down while building on the Bitrefill API at the Free 
 
 ## Payments
 
-- **No ZEC rail.** Bitrefill doesn't accept ZEC, and NEAR 1Click (the bridge route) has no testnet. We prefund a USD balance instead.
+- **No ZEC rail.** Bitrefill doesn't accept ZEC, and NEAR 1Click (the bridge route) has no testnet. The bot's purchases draw on a USD balance we prefund. For topping that balance up from real ZEC we wrote `ssa refill` (below).
+
+## NEAR Intents 1Click (for the ZEC refill)
+
+Not a Bitrefill thing, but it's the other half of "pay Bitrefill from shielded ZEC", so we're putting it here.
+
+- **A dry quote is easy.** `POST /v0/quote` with `"dry": true` returns a price with no deposit address and nothing reserved. We asked for $5 of USDC on Base (an `EXACT_OUTPUT` quote, `amount` in the token's smallest unit, so `5000000`) and got about 0.00388 ZEC back as the input, with the output exactly `5.0`. That let us check the maths before touching real funds. Our parser test runs against that saved response.
+- **The status endpoint returns 404 until a deposit address exists.** `GET /v0/status?depositAddress=…` answers `{"message":"Deposit address … not found","statusCode":404}` for an address the service doesn't know. A dry quote never creates one, so you can't try the status call against a dry run, and you can't tell a typo from "not created yet". We treat any reply without a `status` field as an error and show its message. A "not found yet" state, or a way to look a quote up by id, would be nicer.
+- **Exact-output is the right mode for paying a merchant.** We want Bitrefill to receive exactly the amount we ask for, and `EXACT_OUTPUT` does that. The ZEC we send is what moves, and the quote comes with `minAmountIn` and a slippage setting in basis points.
+- **ZEC goes in at a transparent address.** That's the one place the flow leaves the shielded pool. We'd have liked to pay from a shielded address. We say so in PRIVACY.md instead.
+- **The echoed `quoteRequest` has an `appFees` entry we didn't send.** We haven't chased where it comes from.
+- **No testnet.** We can only try the quote and status calls on mainnet, with small real amounts. So far we have the dry quote only, and a live refill is still to do.
 
 ## Still to fill in
 
