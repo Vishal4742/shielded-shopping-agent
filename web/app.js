@@ -1,14 +1,110 @@
-// Landing page behaviour. No framework: chat loop, view-as toggle, scroll reveals, live stats.
+// Landing page behaviour. No framework: glyph shader, chat loop, view-as toggle, scroll reveals, live stats.
 "use strict";
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const $ = (s) => document.querySelector(s);
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
+/* ---------- glyph shader ----------
+   Downsample the source into one pixel per cell, then draw a Geist Mono glyph per cell:
+   strong edges get a stroke along the edge, everything else a density ramp, tinted with the cell's colour. */
+const RAMP = " ·:;+=xX%#";
+const EDGE = "│╱─╲"; // box-drawing strokes by gradient angle 0, 45, 90, 135 degrees (geist-mono-blocks covers U+2500-259F)
+const MONO_ADVANCE = 0.6; // Geist Mono advance width per em
+const EDGE_MIN = 0.42, DARK = 0.06, INK = 1.3;
+const FADE = 0.3; // cells dimmer than this fade out, so the floor glow has no hard edge
+
+function makeGlyphRenderer(canvas) {
+  const samp = document.createElement("canvas");
+  const sctx = samp.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d");
+  let W = 0, H = 0, ch = 10, cw = 6, cols = 0, rows = 0;
+
+  function resize() {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ch = W < 420 ? 8 : 10; cw = ch * MONO_ADVANCE;
+    cols = Math.floor(W / cw); rows = Math.floor(H / ch);
+    samp.width = cols; samp.height = rows;
+  }
+
+  // draw(src, sx, sy, sw, sh, rowLimit): rowLimit < rows draws only the top rows (the develop effect)
+  function draw(src, sx, sy, sw, sh, rowLimit = Infinity) {
+    if (!cols || !rows) return 0;
+    sctx.imageSmoothingQuality = "high";
+    sctx.drawImage(src, sx, sy, sw, sh, 0, 0, cols, rows);
+    const d = sctx.getImageData(0, 0, cols, rows).data;
+    const L = new Float32Array(cols * rows);
+    for (let q = 0; q < L.length; q++) L[q] = (0.2126 * d[q * 4] + 0.7152 * d[q * 4 + 1] + 0.0722 * d[q * 4 + 2]) / 255;
+    const at = (x, y) => L[Math.min(rows - 1, Math.max(0, y)) * cols + Math.min(cols - 1, Math.max(0, x))];
+    const tint = (v) => Math.min(255, Math.round(v * INK));
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = `500 ${ch}px "Geist Mono", monospace`;
+    ctx.textBaseline = "top";
+    let drawn = 0;
+    const last = Math.min(rows, rowLimit);
+    for (let j = 0; j < last; j++) for (let i = 0; i < cols; i++) {
+      const q = j * cols + i, l = L[q];
+      if (l < DARK) continue;
+      const gx = at(i + 1, j - 1) + 2 * at(i + 1, j) + at(i + 1, j + 1) - at(i - 1, j - 1) - 2 * at(i - 1, j) - at(i - 1, j + 1);
+      const gy = at(i - 1, j + 1) + 2 * at(i, j + 1) + at(i + 1, j + 1) - at(i - 1, j - 1) - 2 * at(i, j - 1) - at(i + 1, j - 1);
+      const angle = (Math.atan2(gy, gx) + Math.PI) % Math.PI;
+      const glyph = Math.hypot(gx, gy) > EDGE_MIN
+        ? EDGE[Math.round(angle / (Math.PI / 4)) % 4]
+        : RAMP[Math.min(RAMP.length - 1, Math.floor(l * RAMP.length))];
+      const alpha = Math.min(1, ((l - DARK) / (FADE - DARK)) ** 2);
+      ctx.fillStyle = `rgb(${tint(d[q * 4])} ${tint(d[q * 4 + 1])} ${tint(d[q * 4 + 2])} / ${alpha.toFixed(2)})`;
+      ctx.fillText(glyph, i * cw, j * ch);
+      drawn++;
+    }
+    return drawn;
+  }
+
+  resize();
+  return { draw, resize, get rows() { return rows; }, get cols() { return cols; } };
+}
+
 function onVisible(el, cb, opts = {}) {
   const io = new IntersectionObserver((entries) => entries.forEach((e) => cb(e.isIntersecting, e)), opts);
   io.observe(el);
   return io;
+}
+
+function loadImage(src) {
+  const img = new Image();
+  img.src = src;
+  return img.decode().then(() => img);
+}
+
+/* ---------- scan: glyphs resolve into the clear render as the section scrolls past ---------- */
+function startScan(fontsReady) {
+  const canvas = $("#scan-canvas"), img = $("#scan-solid"), cap = $("#scan-cap");
+  if (!canvas || !img) return;
+  const CLEAR = "With your viewing key: Jio ₹10 recharge, paid";
+  if (reduced) { img.style.opacity = "1"; canvas.hidden = true; cap.textContent = CLEAR; return; }
+  Promise.all([loadImage("solid.jpg"), fontsReady]).then(([solid]) => {
+    const r = makeGlyphRenderer(canvas);
+    const paint = () => r.draw(solid, 0, 0, solid.naturalWidth, solid.naturalHeight);
+    paint();
+    let pending = false;
+    const update = () => {
+      pending = false;
+      const rect = canvas.getBoundingClientRect(), vh = innerHeight;
+      // 0 while the figure's middle is below 60% of the screen, 1 when its middle reaches 30%
+      const mid = rect.top + rect.height / 2;
+      const p = clamp01((vh * 0.6 - mid) / (vh * 0.3));
+      img.style.opacity = p.toFixed(3);
+      canvas.style.opacity = (1 - p * 0.9).toFixed(3);
+      cap.textContent = p >= 1 ? CLEAR : p <= 0 ? "On the blockchain: unreadable" : `Applying your viewing key · ${Math.round(p * 100)}%`;
+    };
+    const queue = () => { if (!pending) { pending = true; requestAnimationFrame(update); } };
+    addEventListener("scroll", queue, { passive: true });
+    addEventListener("resize", () => { r.resize(); paint(); queue(); });
+    update();
+  }).catch(() => { cap.textContent = "The artwork failed to load."; });
 }
 
 /* ---------- chat: scripted loop while on screen ---------- */
@@ -39,10 +135,13 @@ function startChat() {
 
 /* ---------- view as: chain / Bitrefill / you ---------- */
 const VIEW_NOTES = {
-  chain: "The blockchain sees a private payment. No number, no amount, nothing that points to you.",
+  chain: "On chain this is a shielded transaction: no number, no amount, no memo, and no link back to you.",
   bitrefill: "Bitrefill gets the number and amount it must deliver. It never sees your Zcash address or your Telegram account.",
-  you: "With your viewing key, every field opens.",
+  you: "With your viewing key every field opens, and the memo ties the purchase to your budget.",
 };
+const BLOCKS = "░▒▓█▚▞";
+const SCRAMBLE_MS = 420;
+const noise = (n) => Array.from({ length: n }, () => BLOCKS[(Math.random() * BLOCKS.length) | 0]).join("");
 
 function startViewAs() {
   const tabs = [...document.querySelectorAll(".seg [data-view]")];
@@ -53,8 +152,17 @@ function startViewAs() {
   const setField = (dd, view) => {
     const target = dd.dataset[view];
     const hidden = target === "hidden";
-    dd.textContent = hidden ? "Hidden" : target;
+    const finalText = hidden ? noise(12) : target;
     dd.classList.toggle("hidden", hidden);
+    dd.setAttribute("aria-label", hidden ? "Encrypted" : target);
+    if (reduced) { dd.textContent = finalText; return; }
+    const t0 = performance.now();
+    const step = (now) => { // resolve left to right through block glyphs
+      const p = clamp01((now - t0) / SCRAMBLE_MS), keep = Math.floor(finalText.length * p);
+      dd.textContent = finalText.slice(0, keep) + noise(Math.max(0, finalText.length - keep));
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   };
   const setView = (view, focus = false) => {
     tabs.forEach((t) => {
@@ -165,6 +273,9 @@ function startStats() {
 }
 
 /* ---------- boot ---------- */
+// canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
+const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
+startScan(fontsReady);
 startChat();
 startViewAs();
 startReveals();

@@ -88,24 +88,21 @@
   </section>
 
   <section class="scan reveal" aria-labelledby="scan-h">
-    <div class="wrap">
+    <div class="wrap scan-grid">
       <div class="section-head">
         <p class="eyebrow mono">Every receipt</p>
-        <h2 id="scan-h">Hidden on the blockchain. Clear with your key.</h2>
-        <p class="lead">Each recharge leaves a private note on the blockchain. Only your viewing key can open it. Get the key with /viewkey, or a list of your purchases with /report.</p>
+        <h2 id="scan-h">Unreadable on chain. Clear in your wallet.</h2>
+        <dl class="spec">
+          <div><dt class="mono">Memo</dt><dd class="mono">SSA·7c41e0·jio·₹10</dd></div>
+          <div><dt class="mono">Pool</dt><dd>Shielded, Ironwood</dd></div>
+          <div><dt class="mono">Opens with</dt><dd>The viewing key from /viewkey. /report rebuilds a CSV from it.</dd></div>
+        </dl>
       </div>
-      <div class="pair">
-        <figure class="pane crop">
-          <p class="pane-head mono">On the blockchain</p>
-          <div class="pane-art"><img class="blurred" src="solid.jpg" alt="The receipt, blurred so nothing on it can be read" width="480" height="600" loading="lazy"></div>
-          <figcaption>Amount, sender, receiver: hidden</figcaption>
-        </figure>
-        <figure class="pane crop">
-          <p class="pane-head mono">With your viewing key</p>
-          <div class="pane-art"><img src="solid.jpg" alt="The receipt, clear: a paid ₹10 recharge with an orange tick" width="480" height="600" loading="lazy"></div>
-          <figcaption>Jio ₹10 recharge, paid ✓</figcaption>
-        </figure>
-      </div>
+      <figure class="scan-fig crop">
+        <canvas id="scan-canvas" aria-hidden="true"></canvas>
+        <img id="scan-solid" src="solid.jpg" alt="The same phone, clear: a ₹10 recharge receipt with an orange tick" width="480" height="600" loading="lazy">
+        <figcaption class="scan-label" id="scan-cap">On the blockchain: unreadable</figcaption>
+      </figure>
     </div>
   </section>
 
@@ -160,14 +157,14 @@
     <div class="wrap">
       <div class="section-head">
         <p class="eyebrow mono">How it works</p>
-        <h2 id="how-h">From one rule to a private receipt.</h2>
+        <h2 id="how-h">From one rule to a shielded receipt.</h2>
       </div>
       <ol class="flow">
         <li><span class="mono">01</span><h3>Approve a rule</h3><p>/auto with operator, number, amount and how often. Tap Allow once.</p></li>
         <li><span class="mono">02</span><h3>Heads up</h3><p>A minute before each run you can skip it or stop the rule.</p></li>
         <li><span class="mono">03</span><h3>Caps in code</h3><p>₹10 to ₹50 a run, ₹100 per person a day, ₹200 a day in total, three rules each.</p></li>
         <li><span class="mono">04</span><h3>Bitrefill delivers</h3><p>Paid from a prefunded balance, so it never sees your Zcash address.</p></li>
-        <li><span class="mono">05</span><h3>Private receipt</h3><p>An encrypted memo records the order for your viewing key alone.</p></li>
+        <li><span class="mono">05</span><h3>Shielded receipt</h3><p>An encrypted memo records the order for your viewing key alone.</p></li>
       </ol>
     </div>
   </section>
