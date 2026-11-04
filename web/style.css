@@ -262,6 +262,26 @@ h3 { font-size: 20px; line-height: 28px; }
   24%, 100% { opacity: 0; top: calc(100% + var(--gap) - 5px); left: calc(-150% - 2 * var(--gap) - 2px); }
 }
 
+/* report: Telegram login + the user's own purchases */
+.report-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; }
+.report-head h2 { margin-top: 8px; }
+.report-head .muted { margin-top: 12px; max-width: 60ch; color: var(--text-2); }
+.tg-login { min-height: 40px; }
+.report-out:empty { display: none; }
+.report-out { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.report-out .hello { font-weight: 500; }
+.report-out .note { color: var(--text-2); }
+.report-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.report-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 12px 16px; border-radius: 12px; background: var(--raised); }
+.report-list .what { font-weight: 500; }
+.report-list .meta { grid-column: 1; font: 12px/16px var(--mono); color: var(--text-3); }
+.report-list .state { grid-row: 1 / span 2; grid-column: 2; align-self: center; padding: 4px 8px; border-radius: 8px; font: 500 12px/16px var(--mono); background: rgb(255 255 255 / .06); }
+.report-list .state.ok { color: var(--live); }
+.report-list .state.wait { color: var(--orange); }
+.report-list .state.bad { color: var(--text-3); }
+.report-out h3 { margin-top: 24px; font-size: 16px; line-height: 24px; }
+.btn-link { margin-top: 16px; padding: 0; border: 0; background: none; color: var(--cobalt-tint); font: inherit; text-decoration: underline; cursor: pointer; }
+
 /* stats */
 .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 32px; }
 .panel-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
@@ -363,6 +383,7 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
   main > section { padding: 64px 0; }
   .tagline { padding: 96px 0 !important; }
   .stat-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .report-head { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .how h2 { font-size: 30px; line-height: 36px; }
   .graph { margin-top: 48px; }
   .spec div, .receipt dl div { grid-template-columns: 112px 1fr; gap: 12px; }

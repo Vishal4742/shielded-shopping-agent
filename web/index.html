@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://*.trycloudflare.com; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; connect-src 'self' https://*.trycloudflare.com; img-src 'self' data:">
 <title>Shielded Shopping Agent · phone recharges on autopilot, paid with shielded Zcash</title>
 <meta name="description" content="Approve one rule in Telegram and an agent buys real Jio, Airtel or Vi recharges on schedule, inside limits enforced in code. Every purchase leaves a shielded receipt only your viewing key can read.">
 <meta property="og:title" content="Recharge on autopilot. Leave no trail.">
@@ -22,7 +22,7 @@
 
 <nav class="nav" aria-label="Main">
   <a class="brand" href="#top" aria-current="page"><span class="mark" aria-hidden="true">#</span>Shielded Shopping</a>
-  <span class="links"><a href="#how">How it works</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
+  <span class="links"><a href="#how">How it works</a><a href="#report">My recharges</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
   <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener" aria-label="Open in Telegram"><span>Open<span class="xs-hide"> in Telegram</span></span></a>
 </nav>
 
@@ -189,6 +189,22 @@
           <div><p class="stat mono" id="s-receipts">—</p><p class="stat-label">Shielded receipts</p></div>
         </div>
         <p class="caption mono" id="stats-cap">Connecting to the bot…</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="report reveal" id="report" aria-labelledby="report-h">
+    <div class="wrap">
+      <div class="panel crop report-panel">
+        <div class="report-head">
+          <div>
+            <p class="eyebrow mono">Your recharges</p>
+            <h2 id="report-h">Log in with Telegram to see yours.</h2>
+            <p class="muted">Your purchases, their status and your auto-pay rules. Telegram signs the login, so only you see your list. Phone numbers stay masked.</p>
+          </div>
+          <div class="tg-login" id="tg-login"></div>
+        </div>
+        <div class="report-out" id="report-out" aria-live="polite"></div>
       </div>
     </div>
   </section>

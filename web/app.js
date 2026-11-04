@@ -272,6 +272,88 @@ function startStats() {
   run();
 }
 
+/* ---------- report: Telegram Login Widget → GET {STATS_URL}/me with the signed fields ---------- */
+const TG_FIELDS = ["id", "first_name", "last_name", "username", "photo_url", "auth_date", "hash"];
+const STATE_LABEL = {
+  DELIVERED: ["Delivered", "ok"], RECEIPT_SENDING: ["Delivered", "ok"], RECEIPTED: ["Delivered", "ok"],
+  CONFIRMED: ["In progress", "wait"], PURCHASING: ["In progress", "wait"],
+  UNCERTAIN: ["Checking with Bitrefill", "wait"], FAILED: ["Failed, refunded", "bad"],
+};
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const istTime = (ts) => new Date(ts * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const opName = (op) => ({ jio: "Jio", airtel: "Airtel", vi: "Vi" })[op] || op;
+
+function startReport() {
+  const host = $("#tg-login"), out = $("#report-out");
+  if (!host) return;
+  const base = (window.SSA_CONFIG && window.SSA_CONFIG.STATS_URL || "").replace(/\/$/, "");
+  const say = (...nodes) => out.replaceChildren(...nodes);
+  const showWidget = () => {
+    if (!base) { say(el("p", "note", "Reports need the live link to the bot, and it's offline right now. Send /report to the bot in Telegram instead.")); return; }
+    const s = document.createElement("script");
+    s.async = true;
+    s.src = "https://telegram.org/js/telegram-widget.js?22";
+    s.dataset.telegramLogin = "zcashdemo_bot";
+    s.dataset.size = "large";
+    s.dataset.radius = "8";
+    s.dataset.authUrl = location.origin + location.pathname;
+    s.onerror = () => say(el("p", "note", "The Telegram login button didn't load. Check your connection and reload."));
+    host.replaceChildren(s);
+  };
+  const render = (me, who) => {
+    if (!me.registered) {
+      say(el("p", "hello", `Hi ${who}.`), el("p", "note", "This Telegram account isn't on the invite list yet. Get an invite code at our table, then send /start CODE to @zcashdemo_bot."));
+      return;
+    }
+    const nodes = [el("p", "hello", `Hi ${who}. Here are your latest recharges.`)];
+    if (!me.orders.length) nodes.push(el("p", "note", "No recharges yet. Send /auto jio <number> 10 weekly in Telegram to set up your first one."));
+    else {
+      const list = el("ul", "report-list");
+      me.orders.forEach((o) => {
+        const [label, tone] = STATE_LABEL[o.status] || [o.status, "wait"];
+        const li = el("li");
+        li.append(el("span", "what", `${opName(o.operator)} ₹${o.inr} → ${o.phone}`),
+          el("span", `state ${tone}`, label),
+          el("span", "meta", `${istTime(o.at)}${o.receipt ? " · shielded receipt sent" : ""}`));
+        list.append(li);
+      });
+      nodes.push(list);
+    }
+    if (me.rules.length) {
+      nodes.push(el("h3", null, "Auto-pay rules"));
+      const list = el("ul", "report-list");
+      me.rules.forEach((r) => {
+        const li = el("li");
+        li.append(el("span", "what", `#${r.id} · ${opName(r.operator)} ₹${r.inr} → ${r.phone}`), el("span", "state ok", "On"), el("span", "meta", r.every));
+        list.append(li);
+      });
+      nodes.push(list);
+    }
+    const out_ = el("button", "btn-link", "Log out");
+    out_.type = "button";
+    out_.addEventListener("click", () => { say(); showWidget(); });
+    nodes.push(out_);
+    say(...nodes);
+  };
+
+  const params = new URLSearchParams(location.search);
+  if (!(params.has("hash") && params.has("id"))) { showWidget(); return; }
+  // Came back from Telegram: keep only the signed fields, then clean the address bar.
+  const q = new URLSearchParams(TG_FIELDS.filter((k) => params.has(k)).map((k) => [k, params.get(k)]));
+  const who = params.get("first_name") || "there";
+  history.replaceState(null, "", location.pathname + "#report");
+  $("#report").scrollIntoView();
+  if (!base) { showWidget(); return; }
+  say(el("p", "note", "Loading your recharges…"));
+  fetch(`${base}/me?${q}`, { cache: "no-store" })
+    .then((r) => (r.status === 401 ? Promise.reject(new Error("login")) : r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then((me) => render(me, who))
+    .catch((e) => {
+      say(el("p", "note", e.message === "login" ? "That login expired. Log in again." : "Couldn't reach the bot right now. Try again in a minute, or send /report in Telegram."));
+      showWidget();
+    });
+}
+
 /* ---------- boot ---------- */
 // canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
 const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
@@ -282,3 +364,4 @@ startReveals();
 startTagline();
 startCopy();
 startStats();
+startReport();
