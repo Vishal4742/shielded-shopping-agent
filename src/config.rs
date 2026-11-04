@@ -84,15 +84,21 @@ impl Config {
 }
 
 /// Kill switch. Re-reads `SSA_PAUSED` from the `.env` file on every call (the process env is only
-/// filled once at boot). `"1"` means paused. A missing file, missing key or parse error means
-/// not paused. Nothing is logged, so nothing secret can leak.
+/// filled once at boot). `"1"` on any `SSA_PAUSED=` line means paused. A missing file or key
+/// means not paused. Lines are read one by one rather than through dotenvy, whose iterator stops
+/// at the first malformed line and would hide a `SSA_PAUSED=1` below it. Nothing is logged.
 pub fn paused(env_path: &Path) -> bool {
-    let Ok(iter) = dotenvy::from_path_iter(env_path) else {
+    let Ok(text) = std::fs::read_to_string(env_path) else {
         return false;
     };
-    iter.map_while(Result::ok)
-        .find(|(k, _)| k == PAUSED_KEY)
-        .is_some_and(|(_, v)| v.trim() == "1")
+    text.lines().any(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        line.split_once('=').is_some_and(|(key, value)| {
+            let value = value.split(" #").next().unwrap_or("").trim();
+            key.trim() == PAUSED_KEY && value.trim_matches(|c| c == '"' || c == '\'') == "1"
+        })
+    })
 }
 
 #[cfg(test)]
@@ -201,6 +207,13 @@ mod tests {
         assert!(!paused(&p));
         std::fs::write(&p, "\u{0}\u{1}=== not an env file").unwrap();
         assert!(!paused(&p));
+        std::fs::remove_file(&p).unwrap();
+    }
+
+    #[test]
+    fn paused_is_found_below_a_malformed_line() {
+        let p = temp_env(Some("FOO=bar\n\"=== broken\nSSA_PAUSED=1\n"));
+        assert!(paused(&p), "a bad line must not hide the kill switch");
         std::fs::remove_file(&p).unwrap();
     }
 }
