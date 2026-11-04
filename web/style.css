@@ -1,4 +1,4 @@
-/* Shielded Shopping Agent landing page. Direction A: ASCII glyph shader on black.
+/* Shielded Shopping Agent landing page. Dark, plain visuals.
    Type sizes snap to the Tailwind scale; spacing uses 4 8 12 16 24 32 40 48 64 80 96 only. */
 
 @font-face { font-family: "Clash Display"; src: url(fonts/clash-500.woff2) format("woff2"); font-weight: 500; font-display: swap; }
@@ -12,7 +12,6 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
 @font-face { font-family: "Geist Mono"; src: url(fonts/geist-mono-ext.woff2) format("woff2"); font-weight: 100 900; font-display: swap;
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Geist Mono"; src: url(fonts/geist-mono-blocks.woff2) format("woff2"); font-weight: 100 900; unicode-range: U+2580-259F; }
 @font-face { font-family: "Instrument Serif"; src: url(fonts/instrument-serif-italic.woff2) format("woff2"); font-style: italic; font-weight: 400; font-display: swap; }
 
 :root {
@@ -115,7 +114,6 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
 .art img { display: block; width: 100%; height: 100%; border-radius: 12px; animation: float 6s var(--ease) infinite alternate; }
 @keyframes float { to { transform: translateY(-12px); } }
-.scan-fig canvas { display: block; width: 100%; height: 100%; }
 .art figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 
 /* corner crop marks: 8 flat segments in one layer */
@@ -162,15 +160,13 @@ h3 { font-size: 20px; line-height: 28px; }
 .tg-btn.pressed { background: var(--orange); color: var(--ink); transform: scale(0.98); }
 
 /* scan */
-.scan-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 64px; align-items: center; }
-.spec { margin: 32px 0 0; display: grid; gap: 0; }
-.spec div { display: grid; grid-template-columns: 140px 1fr; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
-.spec dt { font-size: 12px; line-height: 20px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
-.spec dd { margin: 0; font-size: 14px; line-height: 20px; }
-.scan-fig { margin: 0; aspect-ratio: 4 / 5; background: var(--black); border-radius: 12px; }
-.scan-fig canvas, .scan-fig img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 12px; }
-.scan-fig img { opacity: 0; object-fit: cover; }
-.scan-label { position: absolute; z-index: 1; top: 12px; left: 12px; right: 12px; padding: 8px 12px; border-radius: 8px; background: rgb(0 0 0 / .72); color: var(--text); font-size: 14px; line-height: 20px; font-weight: 500; text-wrap: balance; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; max-width: 720px; margin-top: 48px; }
+.pane { margin: 0; padding: 16px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); }
+.pane-head { margin: 0 0 12px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cobalt-tint); }
+.pane-art { aspect-ratio: 4 / 5; overflow: hidden; border-radius: 8px; background: var(--black); }
+.pane-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.pane-art .blurred { filter: blur(20px) grayscale(1) brightness(.7); transform: scale(1.15); }
+.pane figcaption { margin-top: 12px; font-size: 16px; line-height: 24px; font-weight: 500; color: var(--text); text-wrap: balance; }
 
 /* view as */
 .viewas { margin-top: 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; max-width: 680px; }
@@ -273,7 +269,7 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
 @media (max-width: 860px) {
   .links { display: none; }
   .hero { padding-top: 112px; }
-  .hero-grid, .demo-grid, .scan-grid, .try-grid, .faq-grid { grid-template-columns: minmax(0, 1fr); gap: 48px; }
+  .hero-grid, .demo-grid, .try-grid, .faq-grid { grid-template-columns: minmax(0, 1fr); gap: 48px; }
   .art { justify-self: center; max-width: 440px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .qr { justify-self: start; }
