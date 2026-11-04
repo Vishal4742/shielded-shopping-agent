@@ -52,6 +52,14 @@ async fn main() -> anyhow::Result<()> {
     if args.first().map(String::as_str) == Some("refill") {
         return refill_cmd(&args[1..]).await;
     }
+    if let [cmd, order_id] = args.as_slice()
+        && cmd == "refund"
+    {
+        let refunded =
+            orders::refund_without_invoice(&db, order_id, chrono::Utc::now().timestamp())?;
+        println!("order {order_id}: refunded = {refunded}");
+        return Ok(());
+    }
     if let [cmd, birthday] = args.as_slice() {
         anyhow::ensure!(
             cmd == "audit",

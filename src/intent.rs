@@ -12,6 +12,11 @@ pub enum Intent {
         phone: String,
         inr: i64,
     },
+    /// Operator and phone but no amount: show the recharge options as buttons.
+    Choose {
+        operator: Operator,
+        phone: String,
+    },
     Balance,
     Help,
     Unknown,
@@ -57,7 +62,7 @@ pub fn parse_regex(text: &str) -> Intent {
             phone,
             inr,
         },
-        None => Intent::Unknown,
+        None => Intent::Choose { operator, phone },
     }
 }
 
@@ -164,7 +169,8 @@ pub async fn extract(client: &reqwest::Client, api_key: &str, model: &str, text:
     .await;
     match result {
         Ok(Ok(body)) => match parse_claude_response(&body) {
-            Ok(intent) if phone_is_in_text(&intent, text) => intent,
+            // The model answers Unknown for "jio 98…" with no amount; the parser turns that into Choose.
+            Ok(intent) if intent != Intent::Unknown && phone_is_in_text(&intent, text) => intent,
             _ => fallback(),
         },
         _ => fallback(),
@@ -229,12 +235,22 @@ mod tests {
             "jio 987654321 10",
             "jio 98765432101 10",
             "foo 9876543210 10",
-            "jio 9876543210",
         ] {
             assert_eq!(parse_regex(text), Intent::Unknown, "{text}");
         }
         assert_eq!(parse_regex("balance"), Intent::Balance);
         assert_eq!(parse_regex("help"), Intent::Help);
+    }
+
+    #[test]
+    fn operator_and_phone_without_amount_asks_to_choose() {
+        assert_eq!(
+            parse_regex("jio 9876543210"),
+            Intent::Choose {
+                operator: Operator::Jio,
+                phone: "9876543210".into()
+            }
+        );
     }
 
     #[test]

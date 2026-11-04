@@ -47,7 +47,10 @@ const MSG_AUTO_HINT: &str = "Set a recurring top-up like this:\n/auto jio 987654
 const MSG_REPORT_WORKING: &str = "Building your report from your viewing key alone (a fresh watch-only wallet). This takes about 30 s…";
 const MSG_ERROR_REPORT: &str =
     "I couldn't build the report right now. Nothing was changed; try again in a minute.";
-const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 10\n(operator, phone number, rupees). /help for more.";
+const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 to pick a recharge,\nor jio 9876543210 10 (operator, phone number, rupees). /help for more.";
+const MSG_OPTIONS_UNAVAILABLE: &str = "I couldn't load the recharge list right now. Try again in a minute, or send the amount too, e.g. jio 9876543210 10.";
+/// Telegram shows inline keyboards well up to about this many rows.
+const MAX_OPTIONS: usize = 8;
 const MSG_VIEWKEY_HELP: &str = "Read-only: it shows your deposits and receipts, nothing can be spent with it. Import it as a watch-only account in Zingo or zcash-devtool.";
 
 /// Chats already told to DM us, so a busy group is answered once.
@@ -297,21 +300,116 @@ async fn handle_text(
             operator,
             phone,
             inr,
-        } => {
-            let outcome = orders::create_quote(app, tg_id, operator, &phone, inr, now).await?;
-            let request = bot.send_message(chat, quote_text(&outcome, inr, now));
-            match &outcome {
-                QuoteOutcome::Quoted(order) => {
-                    request.reply_markup(quote_keyboard(&order.id)).await?
-                }
-                _ => request.await?,
-            };
-            Ok(())
-        }
+        } => send_quote(bot, app, chat, tg_id, operator, &phone, inr, now).await,
+        Intent::Choose { operator, phone } => send_options(bot, app, chat, operator, &phone).await,
         Intent::Balance => cmd_balance(bot, app, chat, tg_id).await,
         Intent::Help => send(bot, chat, help_text()).await,
         Intent::Unknown => send(bot, chat, MSG_HINT.to_owned()).await,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_quote(
+    bot: &Bot,
+    app: &App,
+    chat: ChatId,
+    tg_id: i64,
+    operator: Operator,
+    phone: &str,
+    inr: i64,
+    now: i64,
+) -> anyhow::Result<()> {
+    let outcome = orders::create_quote(app, tg_id, operator, phone, inr, now).await?;
+    let request = bot.send_message(chat, quote_text(&outcome, inr, now));
+    match &outcome {
+        QuoteOutcome::Quoted(order) => request.reply_markup(quote_keyboard(&order.id)).await?,
+        _ => request.await?,
+    };
+    Ok(())
+}
+
+/// "jio 98…" with no amount: list the catalog packages inside the per-order limits as buttons.
+/// A tap (`pick:<op>_<phone>_<inr>`) makes the normal quote, so every check still applies.
+async fn send_options(
+    bot: &Bot,
+    app: &App,
+    chat: ChatId,
+    operator: Operator,
+    phone: &str,
+) -> anyhow::Result<()> {
+    let product = match app.bitrefill.get_product(orders::slug_for(operator)).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "catalog lookup for options failed");
+            return send(bot, chat, MSG_OPTIONS_UNAVAILABLE.to_owned()).await;
+        }
+    };
+    let options = recharge_options(&product);
+    let name = operator_name(operator);
+    if options.is_empty() {
+        let text = format!(
+            "No {name} recharge between ₹{} and ₹{} right now. Try Jio.",
+            caps::MIN_INR,
+            caps::MAX_INR
+        );
+        return send(bot, chat, text).await;
+    }
+    let rows = options.iter().map(|(inr, label)| {
+        [InlineKeyboardButton::callback(
+            format!("₹{inr} · {label}"),
+            format!("pick:{}_{phone}_{inr}", operator.as_str()),
+        )]
+    });
+    bot.send_message(
+        chat,
+        format!(
+            "Pick a {name} recharge for {}. I'll show the price before anything is bought.",
+            crate::bitrefill::mask_phone(phone)
+        ),
+    )
+    .reply_markup(InlineKeyboardMarkup::new(rows))
+    .await?;
+    Ok(())
+}
+
+/// Packages inside the per-order limits, one per rupee amount (the cheapest), sorted by amount.
+fn recharge_options(product: &crate::bitrefill::Product) -> Vec<(i64, String)> {
+    let mut amounts: Vec<i64> = product
+        .packages
+        .iter()
+        .filter_map(|p| p.inr)
+        .filter(|inr| (caps::MIN_INR..=caps::MAX_INR).contains(inr))
+        .collect();
+    amounts.sort_unstable();
+    amounts.dedup();
+    amounts
+        .into_iter()
+        .filter_map(|inr| orders::pick_package(product, inr).map(|p| (inr, p.value.clone())))
+        .take(MAX_OPTIONS)
+        .collect()
+}
+
+fn operator_name(op: Operator) -> &'static str {
+    match op {
+        Operator::Jio => "Jio",
+        Operator::Airtel => "Airtel",
+        Operator::Vi => "Vi",
+    }
+}
+
+/// `jio_9876543210_10` → (Jio, phone, 10). Re-validated here: callback data comes from the client.
+fn parse_pick(id: &str) -> Option<(Operator, &str, i64)> {
+    let mut parts = id.split('_');
+    let (op, phone, inr) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let operator = Operator::parse(op)?;
+    let phone_ok = phone.len() == 10
+        && phone.bytes().all(|b| b.is_ascii_digit())
+        && matches!(phone.as_bytes()[0], b'6'..=b'9');
+    let inr: i64 = inr.parse().ok()?;
+    (phone_ok && (caps::MIN_INR..=caps::MAX_INR).contains(&inr)).then_some((operator, phone, inr))
 }
 
 // ---------------------------------------------------------------- callbacks
@@ -335,6 +433,11 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     let tg_id = tg_id_of(&q.from);
     let rule_id = || order_id.parse::<i64>().ok();
     match action {
+        Action::Pick => {
+            if let Some((operator, phone, inr)) = parse_pick(order_id) {
+                send_quote(bot, app, chat, tg_id, operator, phone, inr, now).await?;
+            }
+        }
         Action::ApproveRule | Action::SkipRule | Action::StopRule => {
             let Some(id) = rule_id() else { return Ok(()) };
             let text = rule_callback(app, action, id, tg_id)?;
@@ -595,6 +698,7 @@ fn command_args(text: &str) -> &str {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
+    Pick,
     Buy,
     Cancel,
     ApproveRule,
@@ -606,6 +710,7 @@ enum Action {
 fn parse_callback(data: &str) -> Option<(Action, &str)> {
     let (action, id) = data.split_once(':')?;
     let action = match action {
+        "pick" => Action::Pick,
         "buy" => Action::Buy,
         "cancel" => Action::Cancel,
         "rule" => Action::ApproveRule,
@@ -719,7 +824,8 @@ fn viewkey_text(ufvk: &str) -> String {
 fn help_text() -> String {
     format!(
         "I buy Indian mobile top-ups from your private Zcash testnet budget.\n\n\
-         Send: <operator> <phone> <₹>, e.g. jio 9876543210 10\n\
+         Send: <operator> <phone>, e.g. jio 9876543210, and pick a recharge,\n\
+         or add the amount: jio 9876543210 10\n\
          Operators: Jio, Airtel, Vi (the demo package is Jio ₹{min})\n\
          Limits: ₹{min}–₹{max} per order, ₹{day} per day\n\n\
          I show a price first; nothing is bought until you tap ✅ Buy.\n\n\
@@ -816,6 +922,51 @@ fn quote_keyboard(order_id: &str) -> InlineKeyboardMarkup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_pick_accepts_only_valid_operator_phone_and_amount() {
+        assert_eq!(
+            parse_pick("jio_9876543210_10"),
+            Some((Operator::Jio, "9876543210", 10))
+        );
+        for bad in [
+            "jio_9876543210_5",
+            "jio_9876543210_51",
+            "foo_9876543210_10",
+            "jio_5876543210_10",
+            "jio_98765x3210_10",
+            "jio_9876543210_10_1",
+            "jio_9876543210",
+        ] {
+            assert_eq!(parse_pick(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn recharge_options_keep_amounts_inside_limits_cheapest_first() {
+        use crate::bitrefill::{Package, Product};
+        let p = |v: &str, inr, price| Package {
+            value: v.into(),
+            inr,
+            price,
+        };
+        let product = Product {
+            slug: "s".into(),
+            name: "n".into(),
+            packages: vec![
+                p("big", Some(500), 1),
+                p("talk", Some(10), 141),
+                p("talk-dup", Some(10), 150),
+                p("data", Some(11), 155),
+                p("tiny", Some(5), 1),
+                p("ranged", None, 1),
+            ],
+        };
+        assert_eq!(
+            recharge_options(&product),
+            vec![(10, "talk".to_owned()), (11, "data".to_owned())]
+        );
+    }
 
     fn order() -> Order {
         Order {
@@ -936,6 +1087,10 @@ mod tests {
 
     #[test]
     fn parses_rule_callbacks_and_command_args() {
+        assert_eq!(
+            parse_callback("pick:jio_9876543210_10"),
+            Some((Action::Pick, "jio_9876543210_10"))
+        );
         assert_eq!(parse_callback("rule:12"), Some((Action::ApproveRule, "12")));
         assert_eq!(parse_callback("skip:3"), Some((Action::SkipRule, "3")));
         assert_eq!(parse_callback("stop:3"), Some((Action::StopRule, "3")));
