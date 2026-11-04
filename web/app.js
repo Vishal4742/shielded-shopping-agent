@@ -90,7 +90,7 @@ function startHero(fontsReady) {
     const r = makeGlyphRenderer(canvas);
     const frameAt = (k) => [(k % SPRITE.cols) * SPRITE.w, Math.floor(k / SPRITE.cols) * SPRITE.h];
     const paint = (k, rowLimit) => { const [sx, sy] = frameAt(k); return r.draw(sprite, sx, sy, SPRITE.w, SPRITE.h, rowLimit); };
-    cap.textContent = `glyph shader · ${r.cols} × ${r.rows} cells · ${SPRITE.frames} frames`;
+    cap.textContent = "A phone with a paid ₹10 recharge receipt, drawn in text characters";
 
     if (reduced) {
       paint(0);
@@ -137,7 +137,8 @@ function startDiorama() {
     fig.setAttribute("aria-label", "A Mumbai street corner at dusk drawn in moving text glyphs: coins drift from a shielded vault to an orange-awning recharge kiosk");
     retireHero();
     old.style.display = "none";
-    cap.textContent = `ascii diorama · ${d.cols} × ${d.rows} cells · live 3D`;
+    cap.textContent = "Your agent pays the recharge kiosk from a shielded budget, inside fixed limits.";
+    $("#tags-phone").hidden = true; $("#tags-dio").hidden = false;
     let inView = true;
     onVisible(fig, (v) => { inView = v; d.play(v && !document.hidden); });
     document.addEventListener("visibilitychange", () => d.play(inView && !document.hidden));
@@ -151,6 +152,8 @@ function startDiorama() {
 function startScan(fontsReady) {
   const canvas = $("#scan-canvas"), img = $("#scan-solid"), cap = $("#scan-cap");
   if (!canvas || !img) return;
+  const CLEAR = "With your viewing key: Jio ₹10 recharge, paid";
+  if (reduced) { img.style.opacity = "1"; canvas.hidden = true; cap.textContent = CLEAR; return; }
   Promise.all([loadImage("solid.jpg"), fontsReady]).then(([solid]) => {
     const r = makeGlyphRenderer(canvas);
     const paint = () => r.draw(solid, 0, 0, solid.naturalWidth, solid.naturalHeight);
@@ -164,7 +167,7 @@ function startScan(fontsReady) {
       const p = clamp01((vh * 0.6 - mid) / (vh * 0.3));
       img.style.opacity = p.toFixed(3);
       canvas.style.opacity = (1 - p * 0.9).toFixed(3);
-      cap.textContent = p >= 1 ? "viewing key applied" : `scan · ${Math.round(p * 100)}%`;
+      cap.textContent = p >= 1 ? CLEAR : p <= 0 ? "On the blockchain: unreadable" : `Applying your viewing key · ${Math.round(p * 100)}%`;
     };
     const queue = () => { if (!pending) { pending = true; requestAnimationFrame(update); } };
     addEventListener("scroll", queue, { passive: true });
@@ -297,9 +300,9 @@ function startCopy() {
 
 /* ---------- live stats (FR-16): GET {STATS_URL}/stats.json every 10 s while visible ---------- */
 const STATS_POLL_MS = 10_000;
-const STATS_STALE_S = 60;
 const GLOBAL_CAP_INR = 200; // BR-3
-const STATS_KEYS = ["delivered_today", "inr_today", "inr_cap_today", "receipts_total", "paused", "as_of"];
+// The server's shape (src/workers.rs stats_server). It sends no timestamp, so a 200 counts as live.
+const STATS_KEYS = ["orders_delivered", "inr_spent_today", "receipts_sent"];
 
 function startStats() {
   const panel = $("#stats");
@@ -315,29 +318,22 @@ function startStats() {
   };
   if (!base) { offline(); return; }
 
-  // ponytail: also accepts zcash-3f's proposed shape (no as_of, no cap) until one contract wins; drop the branch then
-  const normalize = (j) => (j && !("delivered_today" in j) && "orders_delivered" in j
-    ? { delivered_today: j.orders_delivered, inr_today: j.inr_spent_today, inr_cap_today: GLOBAL_CAP_INR,
-        receipts_total: j.receipts_sent, paused: j.paused, as_of: Math.floor(Date.now() / 1000) }
-    : j);
-  const valid = (j) => j && STATS_KEYS.every((k) => k in j)
-    && ["delivered_today", "inr_today", "inr_cap_today", "receipts_total", "as_of"].every((k) => Number.isInteger(j[k]) && j[k] >= 0)
+  const valid = (j) => j && STATS_KEYS.every((k) => Number.isInteger(j[k]) && j[k] >= 0)
     && typeof j.paused === "boolean";
   const render = (j) => {
-    const age = Math.max(0, Math.round(Date.now() / 1000 - j.as_of));
-    if (age > STATS_STALE_S) { offline(); return; }
-    const capped = j.inr_today >= j.inr_cap_today;
+    const capped = j.inr_spent_today >= GLOBAL_CAP_INR;
     panel.dataset.state = capped ? "capped" : "live";
-    $("#s-delivered").textContent = j.delivered_today;
-    $("#s-inr").textContent = `₹${j.inr_today}`;
-    $("#s-receipts").textContent = j.receipts_total;
-    $("#s-bar").style.transform = `scaleX(${clamp01(j.inr_today / j.inr_cap_today).toFixed(3)})`;
+    $("#s-delivered").textContent = j.orders_delivered;
+    $("#s-inr").textContent = `₹${j.inr_spent_today}`;
+    $("#s-receipts").textContent = j.receipts_sent;
+    $("#s-bar").style.transform = `scaleX(${clamp01(j.inr_spent_today / GLOBAL_CAP_INR).toFixed(3)})`;
     pill.hidden = !j.paused;
-    cap.textContent = capped ? "Today's demo budget is used up · Zcash testnet" : `updated ${age} s ago · Zcash testnet`;
+    cap.textContent = capped ? "Today's demo budget is used up · Zcash testnet"
+      : `live · checked ${new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · Zcash testnet`;
   };
   const poll = () => fetch(`${base}/stats.json`, { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((raw) => { const j = normalize(raw); return valid(j) ? render(j) : offline(); })
+    .then((j) => (valid(j) ? render(j) : offline()))
     .catch(offline);
   let timer = 0;
   const run = () => { clearInterval(timer); if (!document.hidden) { poll(); timer = setInterval(poll, STATS_POLL_MS); } };

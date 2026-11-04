@@ -117,7 +117,19 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .art canvas.diorama { position: absolute; inset: 0; opacity: 0; transition: opacity .9s ease;
   -webkit-mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); }
 .art canvas.diorama.on { opacity: 1; }
-.art figcaption, .scan-fig figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+/* plain-word labels over the hero art (positions match the phone sprite and the diorama camera) */
+.tags { list-style: none; margin: 0; padding: 0; position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.tags[hidden] { display: none; }
+.tags li { position: absolute; padding: 4px 8px; border-radius: 8px; background: rgb(0 0 0 / .8); border: 1px solid var(--line);
+  font: 500 12px/16px var(--mono); color: var(--paper); white-space: nowrap; }
+.tags li::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--orange); vertical-align: 1px; }
+.t-paid { left: 50%; top: 6%; transform: translateX(-50%); }
+.t-receipt { left: 50%; bottom: 8%; transform: translateX(-50%); }
+.t-coins { left: 34%; top: 22%; }
+.t-vault { left: 4%; top: 46%; }
+.t-kiosk { right: 4%; top: 41%; }
+.t-limits { left: 4%; bottom: 14%; }
+.art figcaption { position: absolute; left: 0; right: 0; top: calc(100% + 8px); font-size: 14px; line-height: 20px; color: var(--text-2); text-wrap: balance; }
 
 /* corner crop marks: 8 flat segments in one layer */
 .crop { position: relative; }
@@ -171,6 +183,7 @@ h3 { font-size: 20px; line-height: 28px; }
 .scan-fig { margin: 0; aspect-ratio: 4 / 5; background: var(--black); border-radius: 12px; }
 .scan-fig canvas, .scan-fig img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 12px; }
 .scan-fig img { opacity: 0; object-fit: cover; }
+.scan-label { position: absolute; z-index: 1; top: 12px; left: 12px; right: 12px; padding: 8px 12px; border-radius: 8px; background: rgb(0 0 0 / .72); color: var(--text); font-size: 14px; line-height: 20px; font-weight: 500; text-wrap: balance; }
 
 /* view as */
 .viewas { margin-top: 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; max-width: 680px; }
@@ -358,6 +371,9 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
   .foot-grid { grid-template-columns: minmax(0, 1fr); }
   .wordmark { font-size: 72px; }
   .nav { gap: 12px; }
+}
+@media (max-width: 400px) {
+  .xs-hide { display: none; }
   .seg button { padding: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {

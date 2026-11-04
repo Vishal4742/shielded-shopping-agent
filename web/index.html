@@ -23,7 +23,7 @@
 <nav class="nav" aria-label="Main">
   <a class="brand" href="#top" aria-current="page"><span class="mark" aria-hidden="true">#</span>Shielded Shopping</a>
   <span class="links"><a href="#how">How it works</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
-  <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener">Open in Telegram</a>
+  <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener" aria-label="Open in Telegram"><span>Open<span class="xs-hide"> in Telegram</span></span></a>
 </nav>
 
 <header class="hero" id="top">
@@ -42,14 +42,24 @@
         <button type="button" class="chip-copy" data-copy="@zcashdemo_bot" aria-describedby="handle">Copy</button>
       </div>
       <dl class="facts">
-        <div><dt>Runs</dt><dd class="mono">daily, weekly, monthly</dd></div>
+        <div><dt>Runs</dt><dd class="mono">daily, weekly, every 2m</dd></div>
         <div><dt>Per recharge</dt><dd class="mono">₹10 to ₹50</dd></div>
         <div><dt>Before each run</dt><dd class="mono">skip or stop</dd></div>
       </dl>
     </div>
-    <figure class="art" aria-label="A phone showing a ₹10 recharge receipt, drawn in moving text glyphs">
+    <figure class="art">
       <canvas id="hero-canvas" aria-hidden="true"></canvas>
-      <figcaption class="mono" id="hero-cap">glyph shader · loading</figcaption>
+      <ul class="tags" id="tags-phone">
+        <li class="t-paid">₹10 recharge · paid ✓</li>
+        <li class="t-receipt">Receipt: shielded, for your key only</li>
+      </ul>
+      <ul class="tags" id="tags-dio" hidden>
+        <li class="t-coins">₹10 every week</li>
+        <li class="t-vault">Your budget · shielded ZEC</li>
+        <li class="t-kiosk">Jio recharge via Bitrefill</li>
+        <li class="t-limits">Limits: ₹50 an order · ₹100 a day</li>
+      </ul>
+      <figcaption id="hero-cap">A phone with a paid ₹10 recharge receipt, drawn in text characters</figcaption>
     </figure>
   </div>
 </header>
@@ -69,10 +79,10 @@
           <p class="msg me" data-step="0">/auto jio 98xxxxxx10 10 weekly</p>
           <div class="msg bot" data-step="1">
             <p>New rule: Jio ₹10 to 98xxxx…10, every week</p>
-            <p class="mono small">Caps: ₹100 a day for you · ₹200 a day in total</p>
+            <p class="mono small">Limits: ₹10 to ₹50 a run · ₹100 a day</p>
             <div class="msg-buttons"><span class="tg-btn" data-press>✓ Allow auto-pay</span><span class="tg-btn">Cancel</span></div>
           </div>
-          <p class="msg bot" data-step="2">Rule 1 is active. /rules lists it, /stop 1 ends it.</p>
+          <p class="msg bot" data-step="2">Auto-pay #1 is on. /rules shows it, /stop 1 ends it.</p>
           <div class="msg bot" data-step="3">
             <p>Rule 1 buys Jio ₹10 in one minute.</p>
             <div class="msg-buttons"><span class="tg-btn">Skip this one</span><span class="tg-btn">Stop rule</span></div>
@@ -95,13 +105,13 @@
         <dl class="spec">
           <div><dt class="mono">Memo</dt><dd class="mono">SSA·7c41e0·jio·₹10</dd></div>
           <div><dt class="mono">Pool</dt><dd>Shielded, Ironwood</dd></div>
-          <div><dt class="mono">Opens with</dt><dd>The viewing key from /viewkey</dd></div>
+          <div><dt class="mono">Opens with</dt><dd>The viewing key from /viewkey. /report rebuilds a CSV from it.</dd></div>
         </dl>
       </div>
       <figure class="scan-fig crop">
         <canvas id="scan-canvas" aria-hidden="true"></canvas>
         <img id="scan-solid" src="solid.jpg" alt="The same phone, clear: a ₹10 recharge receipt with an orange tick" width="480" height="600" loading="lazy">
-        <figcaption class="mono" id="scan-cap">scan · 0%</figcaption>
+        <figcaption class="scan-label" id="scan-cap">On the blockchain: unreadable</figcaption>
       </figure>
     </div>
   </section>
@@ -136,6 +146,8 @@
             <li>Deposits go to a shielded address made for you</li>
             <li>Every run passes the same caps in code as a manual buy</li>
             <li>/viewkey hands you the key that reads every receipt</li>
+            <li>/report proves your purchases from that key alone</li>
+            <li>Wallet sync can run over Tor, hiding the bot's IP</li>
           </ul>
         </article>
         <article class="card">
@@ -144,6 +156,7 @@
             <li>Bitrefill knows the phone number and the amount</li>
             <li>Telegram knows you chat with the bot</li>
             <li>Testnet build: the operator holds the wallet keys</li>
+            <li>Refilling Bitrefill from ZEC takes one transparent hop</li>
           </ul>
         </article>
       </div>
@@ -220,7 +233,7 @@
           <li>Send <code class="mono">/auto jio 98xxxxxx10 10 every 2m</code> and tap Allow auto-pay. The first run comes two minutes later.</li>
         </ol>
         <ul class="limits mono" aria-label="Limits">
-          <li>₹10 to ₹50 per recharge</li><li>₹100 per person per day</li><li>₹200 per day in total</li><li>One buy per 30 s</li><li>Invite only</li><li>Testnet ZEC</li>
+          <li>₹10 to ₹50 per recharge</li><li>₹100 per person per day</li><li>₹200 per day in total</li><li>One buy per 30 s</li><li>Up to 3 rules each</li><li>Invite only</li><li>Testnet ZEC</li>
         </ul>
       </div>
       <figure class="qr crop">
@@ -237,12 +250,14 @@
         <h2 id="faq-h">Before you approve a rule.</h2>
       </div>
       <div class="faq-list">
-        <details><summary>Can the agent spend more than I approved?</summary><p>No. A rule names one operator, one number and one amount. Each run goes through the same checks in code as a manual buy: your daily cap, the total daily cap, the 30 second gap and your balance. The language model only reads manual messages and never starts a run.</p></details>
+        <details><summary>Can the agent spend more than I approved?</summary><p>No. A rule names one operator, one number and one amount. Each run goes through the same checks in code as a manual buy: your daily cap, the total daily cap, the 30 second gap, the operator's kill switch and your balance. The language model only reads manual messages and never starts a run. There is no override: raising a limit means changing the code.</p></details>
         <details><summary>How do I stop a rule?</summary><p>Tap Stop on any heads up message, or send /stop with the rule number. /rules lists every rule you have running.</p></details>
+        <details><summary>What if I miss the heads up?</summary><p>The run goes ahead. The heads up is a chance to skip, not a gate. If the bot was down when a run was due, that run is skipped rather than bought late in a burst.</p></details>
         <details><summary>Who holds the funds?</summary><p>In this testnet build the operator keeps the wallet seed. You still get your own shielded account with its own viewing key, so your receipts never mix with anyone else's. Moving custody to you is the next milestone.</p></details>
-        <details><summary>What does Bitrefill learn?</summary><p>The number and amount it has to deliver. It is paid from a prefunded balance, so it never sees your Zcash address, your Telegram account or your other purchases.</p></details>
+        <details><summary>What does Bitrefill learn?</summary><p>The number and amount it has to deliver. It is paid from a prefunded balance, so it never sees your Zcash address, your Telegram account or your other purchases. We refill that balance from shielded ZEC through NEAR Intents, which takes one transparent transfer: one pooled refill from us, not one per user.</p></details>
+        <details><summary>Does the bot hide where it runs?</summary><p>With Tor switched on, wallet sync and receipts go through Tor, so the light wallet server sees a Tor exit instead of our IP. Telegram, Bitrefill and /report still connect directly.</p></details>
         <details><summary>Why testnet ZEC?</summary><p>It is a hackathon build, and testnet ZEC has no market value. The recharges themselves are real, which is why the ₹200 daily cap covers everyone together.</p></details>
-        <details><summary>How do I read my receipts?</summary><p>Send /viewkey. Import that key into Zingo or zcash-devtool and each memo appears, for example <code class="mono">SSA·7c41e0·jio·₹10</code>. You can also hand the key to an auditor.</p></details>
+        <details><summary>How do I read my receipts?</summary><p>Send /viewkey. Import that key into Zingo or zcash-devtool and each memo appears, for example <code class="mono">SSA·7c41e0·jio·₹10</code>. Or send /report: the bot builds a watch-only wallet from that key alone and sends back a CSV of your purchases. You can also hand the key to an auditor.</p></details>
       </div>
     </div>
   </section>
