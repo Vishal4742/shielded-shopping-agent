@@ -1,0 +1,23 @@
+[2m2026-11-04T09:01:26.370997Z[0m [32m INFO[0m [2mzcash_devtool::remote[0m[2m:[0m Connecting to testnet.zec.rocks:443
+Creating transaction...
+Proposed transfer:
+  Min target height: 4581531
+  Fee rule: Zip317
+  Steps (1):
+    Step 0:
+      Shielding: false
+      Payments (1):
+        [0] -> utest10mevf5tzcq9zstmdxysn0yk3s2t3e5x9t36wujmdah2prcenj2n77498lqkymru7h6lyhw4ss8apdz8dchpzgvuzzef3ssdd9krhwdd65qany8rt9xv7nnphnet5t70kt8x8whpqmrtlv6u2mll7q554lgwwn2k2r687kzya0t9gxyjkud2s9htprl47yehz5ezzllv7v6mlgh8xgym
+            Amount:   0.00100000 TAZ
+            Pool: Ironwood
+            Memo (text): SSA·00000000-test-memo·jio·₹10
+      Shielded inputs (1) at anchor height 4581526:
+        - Ironwood 752751150345164f641417ef6c02160c969e03818b25ee71b37174ab306b54ca:0    1.00000000 TAZ
+      Change outputs (4):
+        - Ironwood   0.24968750 TAZ
+        - Ironwood   0.24968750 TAZ
+        - Ironwood   0.24968750 TAZ
+        - Ironwood   0.24968750 TAZ
+      Fee:   0.00025000 TAZ
+Sending transaction...
+5c5abb6f8c0fe605c9f923ab160e13769dd70a4c963ff10bb425a816c811bf5a
