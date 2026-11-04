@@ -56,7 +56,8 @@ flowchart LR
 | `zec` | Runs `zcash-devtool` behind **one wallet mutex** and parses its output | |
 | `db` | SQLite: invites, users, ledger, orders. The ✅ step is one `BEGIN IMMEDIATE` transaction | |
 | `config` | `.env` loading. Secrets redacted in `Debug`. `SSA_PAUSED` re-read on every ✅ | |
-| `telegram` | Handlers, invite allowlist, private-chat-only guard, owner check on buttons | |
+| `autopay` | Auto-pay rules: `/auto` schedule parsing, warn-then-run loop, next-slot maths. Every run goes through `orders`, so caps and the kill switch apply | partly (`parse_rule`, `next_slot` are pure) |
+| `telegram` | Handlers (`/start`, `/balance`, `/viewkey`, `/help`, `/auto`, `/rules`, `/stop`), invite allowlist, private-chat-only guard, owner check on buttons | |
 
 Pure modules do no I/O and take the clock as a parameter, so they're unit-tested without mocks.
 
@@ -106,6 +107,29 @@ stateDiagram-v2
 ```
 
 Every change goes through `order_fsm` plus a conditional `UPDATE … WHERE status = <expected>`, so a double tap can't buy twice. A purchase is **never retried automatically**. An unclear outcome becomes `UNCERTAIN` for a human to resolve.
+
+## Auto-pay
+
+The user approves a rule once (`/auto jio 9876543210 10 weekly`), and the `autopay` loop then buys on schedule. It wakes every 10 s. Each run quotes and buys through the same `orders::confirm_and_buy` path as a manual ✅, so the caps, the ledger and `SSA_PAUSED` apply every time.
+
+```mermaid
+stateDiagram-v2
+  [*] --> created: /auto
+  created --> approved: ✅ Allow auto-pay
+  created --> stopped: ❌ or /stop
+  approved --> warned: 1 min before the slot
+  warned --> run: slot reached
+  warned --> skipped: Skip tapped
+  run --> approved: next slot
+  skipped --> approved: next slot
+  approved --> stopped: /stop or 🛑
+```
+
+- **Created.** `/auto` stores the rule unapproved and replies with a card. Nothing runs until ✅. The first run is one period away, but never less than 2 minutes, so the warning always comes first.
+- **Warned.** A minute before each slot the bot messages the user with Skip and Stop buttons. Skip drops that one run and keeps the rule.
+- **Run or skip.** The slot is claimed with a conditional SQL update before anything is bought, so two ticks can't run it twice. If the quote or the caps refuse, the user gets a message and the rule stays on.
+- **Next slot.** The next run stays on the rule's grid. After downtime, missed slots are skipped, never bought late in a burst.
+- **Stop any time.** `/rules` lists active rules and `/stop <n>` ends one. At most 3 rules per user, and the shortest period is 1 minute.
 
 ## Money and the wallet
 
