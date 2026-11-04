@@ -23,7 +23,7 @@
 <nav class="nav" aria-label="Main">
   <a class="brand" href="#top" aria-current="page"><span class="mark" aria-hidden="true">#</span>Shielded Shopping</a>
   <span class="links"><a href="#how">How it works</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></span>
-  <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener" aria-label="Open in Telegram">Open<span class="xs-hide"> in Telegram</span></a>
+  <a class="btn btn-sm btn-light" href="https://t.me/zcashdemo_bot" rel="noopener" aria-label="Open in Telegram"><span>Open<span class="xs-hide"> in Telegram</span></span></a>
 </nav>
 
 <header class="hero" id="top">
@@ -47,9 +47,9 @@
         <div><dt>Before each run</dt><dd class="mono">skip or stop</dd></div>
       </dl>
     </div>
-    <figure class="art" aria-label="A phone showing a ₹10 recharge receipt, drawn in moving text glyphs">
-      <canvas id="hero-canvas" aria-hidden="true"></canvas>
-      <figcaption class="mono" id="hero-cap">glyph shader · loading</figcaption>
+    <figure class="art">
+      <img src="solid.jpg" alt="A phone showing a paid ₹10 recharge receipt with an orange tick" width="480" height="600" fetchpriority="high">
+      <figcaption class="mono">Jio ₹10 · recharge delivered</figcaption>
     </figure>
   </div>
 </header>
@@ -101,7 +101,7 @@
       <figure class="scan-fig crop">
         <canvas id="scan-canvas" aria-hidden="true"></canvas>
         <img id="scan-solid" src="solid.jpg" alt="The same phone, clear: a ₹10 recharge receipt with an orange tick" width="480" height="600" loading="lazy">
-        <figcaption class="mono" id="scan-cap">scan · 0%</figcaption>
+        <figcaption class="scan-label" id="scan-cap">On the blockchain: unreadable</figcaption>
       </figure>
     </div>
   </section>

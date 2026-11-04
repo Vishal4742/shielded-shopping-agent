@@ -113,8 +113,10 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .facts dd { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
 
 .art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
-.art canvas, .scan-fig canvas { display: block; width: 100%; height: 100%; }
-.art figcaption, .scan-fig figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+.art img { display: block; width: 100%; height: 100%; border-radius: 12px; animation: float 6s var(--ease) infinite alternate; }
+@keyframes float { to { transform: translateY(-12px); } }
+.scan-fig canvas { display: block; width: 100%; height: 100%; }
+.art figcaption { position: absolute; left: 0; bottom: -24px; font-size: 12px; line-height: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 
 /* corner crop marks: 8 flat segments in one layer */
 .crop { position: relative; }
@@ -168,6 +170,7 @@ h3 { font-size: 20px; line-height: 28px; }
 .scan-fig { margin: 0; aspect-ratio: 4 / 5; background: var(--black); border-radius: 12px; }
 .scan-fig canvas, .scan-fig img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 12px; }
 .scan-fig img { opacity: 0; object-fit: cover; }
+.scan-label { position: absolute; z-index: 1; top: 12px; left: 12px; right: 12px; padding: 8px 12px; border-radius: 8px; background: rgb(0 0 0 / .72); color: var(--text); font-size: 14px; line-height: 20px; font-weight: 500; text-wrap: balance; }
 
 /* view as */
 .viewas { margin-top: 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; max-width: 680px; }
@@ -297,4 +300,5 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal, .msg { transform: none !important; transition: opacity 300ms linear; }
+  .art img { animation: none; }
 }

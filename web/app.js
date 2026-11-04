@@ -79,52 +79,12 @@ function loadImage(src) {
   return img.decode().then(() => img);
 }
 
-/* ---------- hero: 96 frame turntable from a 12 x 8 sprite sheet ---------- */
-const SPRITE = { cols: 12, rows: 8, w: 200, h: 250, frames: 96, fps: 24 };
-const DEVELOP_MS = 900;
-
-function startHero(fontsReady) {
-  const canvas = $("#hero-canvas"), cap = $("#hero-cap");
-  if (!canvas) return;
-  Promise.all([loadImage("sprite.jpg"), fontsReady]).then(([sprite]) => {
-    const r = makeGlyphRenderer(canvas);
-    const frameAt = (k) => [(k % SPRITE.cols) * SPRITE.w, Math.floor(k / SPRITE.cols) * SPRITE.h];
-    const paint = (k, rowLimit) => { const [sx, sy] = frameAt(k); return r.draw(sprite, sx, sy, SPRITE.w, SPRITE.h, rowLimit); };
-    cap.textContent = `glyph shader · ${r.cols} × ${r.rows} cells · ${SPRITE.frames} frames`;
-
-    if (reduced) {
-      paint(0);
-      addEventListener("resize", () => { r.resize(); paint(0); });
-      return;
-    }
-    let running = false, raf = 0, t0 = performance.now(), lastFrame = -1;
-    const tick = (now) => {
-      const elapsed = now - t0;
-      const k = Math.floor((elapsed / 1000) * SPRITE.fps) % SPRITE.frames;
-      const developing = elapsed < DEVELOP_MS;
-      if (k !== lastFrame || developing) {
-        const p = clamp01(elapsed / DEVELOP_MS), eased = 1 - Math.pow(1 - p, 3);
-        paint(k, developing ? Math.ceil(r.rows * eased) : Infinity);
-        lastFrame = k;
-      }
-      if (running) raf = requestAnimationFrame(tick);
-    };
-    const play = (on) => {
-      if (on === running) return;
-      running = on;
-      if (on) raf = requestAnimationFrame(tick); else cancelAnimationFrame(raf);
-    };
-    let inView = true;
-    onVisible(canvas, (v) => { inView = v; play(v && !document.hidden); });
-    document.addEventListener("visibilitychange", () => play(inView && !document.hidden));
-    addEventListener("resize", () => { r.resize(); lastFrame = -1; });
-  }).catch(() => { cap.textContent = "The artwork failed to load. Reload the page to try again."; });
-}
-
 /* ---------- scan: glyphs resolve into the clear render as the section scrolls past ---------- */
 function startScan(fontsReady) {
   const canvas = $("#scan-canvas"), img = $("#scan-solid"), cap = $("#scan-cap");
   if (!canvas || !img) return;
+  const CLEAR = "With your viewing key: Jio ₹10 recharge, paid";
+  if (reduced) { img.style.opacity = "1"; canvas.hidden = true; cap.textContent = CLEAR; return; }
   Promise.all([loadImage("solid.jpg"), fontsReady]).then(([solid]) => {
     const r = makeGlyphRenderer(canvas);
     const paint = () => r.draw(solid, 0, 0, solid.naturalWidth, solid.naturalHeight);
@@ -138,7 +98,7 @@ function startScan(fontsReady) {
       const p = clamp01((vh * 0.6 - mid) / (vh * 0.3));
       img.style.opacity = p.toFixed(3);
       canvas.style.opacity = (1 - p * 0.9).toFixed(3);
-      cap.textContent = p >= 1 ? "viewing key applied" : `scan · ${Math.round(p * 100)}%`;
+      cap.textContent = p >= 1 ? CLEAR : p <= 0 ? "On the blockchain: unreadable" : `Applying your viewing key · ${Math.round(p * 100)}%`;
     };
     const queue = () => { if (!pending) { pending = true; requestAnimationFrame(update); } };
     addEventListener("scroll", queue, { passive: true });
@@ -315,7 +275,6 @@ function startStats() {
 /* ---------- boot ---------- */
 // canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
 const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
-startHero(fontsReady);
 startScan(fontsReady);
 startChat();
 startViewAs();
