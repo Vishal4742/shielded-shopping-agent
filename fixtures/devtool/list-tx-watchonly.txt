@@ -1,0 +1,33 @@
+Transactions:
+752751150345164f641417ef6c02160c969e03818b25ee71b37174ab306b54ca
+     Mined: 4557290 (2026-10-30 3:45:19.0 +00:00:00)
+    Amount:   1.00000000 TAZ
+  Fee paid:   0.00015000 TAZ
+  Sent 0 notes, received 1 notes, 1 memos
+  Output 0 (Ironwood)
+    Value:   1.00000000 TAZ
+    Received by account: 0374960a-1314-44d9-beae-c161ea0451aa (audit)
+    To: utest1g7jsecf3d384rle5z7yj70dhlfjzws24nc6863thqzxn5d7ama8x4j3kgqjmef7t979k8raccls4khzm27tr9gj8m98y672lv5ykgvv6tjazhvvug9am3q4v00usu94rt86ef23kqu6tqeas7ayus65plujqp2a4jpfzz357f5ux7jfxugus392cxexcda00t4ekaxdxsql46jjyysf
+    Memo: Memo::Text("ssa faucet test")
+5c5abb6f8c0fe605c9f923ab160e13769dd70a4c963ff10bb425a816c811bf5a
+     Mined: 4581535 (2026-11-04 9:01:53.0 +00:00:00)
+    Amount:   0.00125000 TAZ
+  Fee paid:   0.00025000 TAZ
+  Sent 1 notes, received 0 notes, 1 memos
+  Output 0 (Ironwood)
+    Value:   0.00100000 TAZ
+    Sent from account: 0374960a-1314-44d9-beae-c161ea0451aa (audit)
+    To: utest14f3ph0m9jn7jaz2mcdwwxlnlrkhkgsrnrpxsc7wqt8w4wec9zewq0k3g3uf0d3z93fmtzllda0anxulqvr3k2n0aaz89c3uetq6l6am7
+    Memo: Memo::Text("SSA·00000000-test-memo·jio·₹10")
+  Output 1 (Ironwood)
+    Value:   0.24968750 TAZ (Change)
+    Memo: Memo::Empty
+  Output 2 (Ironwood)
+    Value:   0.24968750 TAZ (Change)
+    Memo: Memo::Empty
+  Output 3 (Ironwood)
+    Value:   0.24968750 TAZ (Change)
+    Memo: Memo::Empty
+  Output 4 (Ironwood)
+    Value:   0.24968750 TAZ (Change)
+    Memo: Memo::Empty

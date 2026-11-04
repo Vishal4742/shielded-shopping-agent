@@ -1,0 +1,14 @@
+Account 093fb250-5e57-4ca4-a371-ce280b15b7be (birthday height 4557152)
+     Name: treasury
+     UIVK: uivktest1fakeuivk0
+     UFVK: uviewtest1fakeufvk0
+     Source: derived
+       Seed fingerprint: 0000000000000000000000000000000000000000000000000000000000000000
+       Account index: 0
+Account d87ee4a6-ea65-4258-b903-713b7ba04ede (birthday height 4557153)
+     Name: user-test
+     UIVK: uivktest1fakeuivk1
+     UFVK: uviewtest1fakeufvk1
+     Source: derived
+       Seed fingerprint: 0000000000000000000000000000000000000000000000000000000000000000
+       Account index: 1
