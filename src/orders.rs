@@ -28,6 +28,8 @@ pub struct App {
     pub prices: PriceCache,
 }
 
+// One short-lived value per request; boxing `Order` would only add noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum QuoteOutcome {
     Quoted(Order),
@@ -560,5 +562,407 @@ mod tests {
         assert_eq!(pick_package(&product, 10).unwrap().value, "b");
         assert!(pick_package(&product, 15).is_none());
         assert_eq!(available_inr(&product), vec![10, 20]);
+    }
+
+    // ---- real purchase path (dry_run = false) against a local mock Bitrefill, no network ----
+
+    use serde_json::json;
+    use tokio::net::{TcpListener, TcpStream};
+
+    const JIO_CATALOG: &str = include_str!("../fixtures/bitrefill/reliance-jio-india-bundles.json");
+    const INVOICE_DELIVERED: &str =
+        include_str!("../fixtures/bitrefill/invoice-delivered.synthetic.json");
+    const INVOICE_ID: &str = "inv-test-1";
+    const ROUTE_CATALOG: &str = "GET /products/reliance-jio-india-bundles";
+    const ROUTE_CREATE: &str = "POST /invoices";
+    const ROUTE_STATUS: &str = "GET /invoices/inv-test-1";
+
+    /// (HTTP status, JSON body)
+    type Canned = (u16, String);
+    type Routes = Arc<std::sync::Mutex<HashMap<String, Vec<Canned>>>>;
+    /// (`"METHOD /path"`, raw request) in arrival order.
+    type Seen = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    /// Hand-rolled HTTP/1.1 mock, one request per connection (`Connection: close`).
+    /// Each route holds a script: every hit pops the next response, the last one repeats.
+    // ponytail: exact "METHOD /path" matching only; enough for the 3 Bitrefill routes.
+    struct MockBitrefill {
+        base: String,
+        routes: Routes,
+        seen: Seen,
+    }
+
+    impl MockBitrefill {
+        async fn start(routes: Vec<(&str, Vec<Canned>)>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let routes: Routes = Arc::new(std::sync::Mutex::new(
+                routes
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            ));
+            let seen: Seen = Arc::default();
+            let (r, s) = (Arc::clone(&routes), Arc::clone(&seen));
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let (r, s) = (Arc::clone(&r), Arc::clone(&s));
+                    tokio::spawn(async move {
+                        let _ = mock_serve(stream, r, s).await;
+                    });
+                }
+            });
+            Self { base, routes, seen }
+        }
+
+        /// Replaces a route's script (e.g. flip the invoice to delivered mid-test).
+        fn set(&self, route: &str, script: Vec<Canned>) {
+            self.routes
+                .lock()
+                .unwrap()
+                .insert(route.to_string(), script);
+        }
+
+        fn count(&self, route: &str) -> usize {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| k == route)
+                .count()
+        }
+
+        /// Raw requests (headers + body) seen on a route.
+        fn requests(&self, route: &str) -> Vec<String> {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| k == route)
+                .map(|(_, raw)| raw.clone())
+                .collect()
+        }
+    }
+
+    fn next_canned(routes: &Routes, key: &str) -> Canned {
+        let mut routes = routes.lock().unwrap();
+        match routes.get_mut(key) {
+            Some(script) if script.len() > 1 => script.remove(0),
+            Some(script) => script
+                .first()
+                .cloned()
+                .unwrap_or((404, r#"{"error":"empty script"}"#.into())),
+            None => (404, r#"{"error":"no such route"}"#.into()),
+        }
+    }
+
+    /// Reads headers, then `Content-Length` body bytes, so closing never RSTs an unread body.
+    async fn mock_read_request(stream: &TcpStream) -> std::io::Result<String> {
+        let mut buf = Vec::new();
+        loop {
+            if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if buf.len() >= end + 4 + len {
+                    break;
+                }
+            }
+            stream.readable().await?;
+            let mut chunk = [0u8; 4096];
+            match stream.try_read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    async fn mock_write_all(stream: &TcpStream, mut bytes: &[u8]) -> std::io::Result<()> {
+        while !bytes.is_empty() {
+            stream.writable().await?;
+            match stream.try_write(bytes) {
+                Ok(n) => bytes = &bytes[n..],
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    async fn mock_serve(stream: TcpStream, routes: Routes, seen: Seen) -> std::io::Result<()> {
+        let raw = mock_read_request(&stream).await?;
+        let key = raw.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        seen.lock().unwrap().push((key.clone(), raw));
+        let (status, body) = next_canned(&routes, &key);
+        let response = format!(
+            "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        mock_write_all(&stream, response.as_bytes()).await
+    }
+
+    fn app_with_bitrefill(base: &str) -> App {
+        let mut app = app(false);
+        app.bitrefill = Bitrefill::new(base, "k", false).unwrap();
+        app
+    }
+
+    fn ok(body: impl Into<String>) -> Canned {
+        (200, body.into())
+    }
+
+    fn create_ok() -> Canned {
+        ok(json!({"data": {"id": INVOICE_ID, "status": "unpaid"}}).to_string())
+    }
+
+    fn invoice_json(status: &str, order_status: &str) -> Canned {
+        ok(json!({"data": {
+            "id": INVOICE_ID, "status": status, "orders": [{"id": "o", "status": order_status}]
+        }})
+        .to_string())
+    }
+
+    fn pending() -> Canned {
+        invoice_json("pending", "created")
+    }
+
+    fn delivered() -> Canned {
+        ok(INVOICE_DELIVERED)
+    }
+
+    fn failed() -> Canned {
+        invoice_json("complete", "failed")
+    }
+
+    /// Catalog + create + status routes; `status_script` drives `GET /invoices/inv-test-1`.
+    async fn mock_with(create: Canned, status_script: Vec<Canned>) -> MockBitrefill {
+        MockBitrefill::start(vec![
+            (ROUTE_CATALOG, vec![ok(JIO_CATALOG)]),
+            (ROUTE_CREATE, vec![create]),
+            (ROUTE_STATUS, status_script),
+        ])
+        .await
+    }
+
+    fn total_zat() -> i64 {
+        9_000 + FEE_ZAT
+    }
+
+    fn status_of(app: &App, id: &str) -> String {
+        app.db.get_order(id).unwrap().unwrap().status
+    }
+
+    fn invoice_of(app: &App, id: &str) -> Option<String> {
+        app.db.get_order(id).unwrap().unwrap().bitrefill_invoice
+    }
+
+    /// Parked in PURCHASING with a DEBIT and an invoice id, then UNCERTAIN (as a timed-out
+    /// poll leaves it), without waiting 15 s.
+    fn seed_uncertain(app: &App, id: &str, tg_id: i64, invoice: &str) {
+        quoted(app, id, tg_id, 100);
+        let confirmed = app.db.confirm_order(id, tg_id, total_zat(), 101).unwrap();
+        assert!(matches!(confirmed, ConfirmOutcome::Confirmed));
+        app.db.set_invoice(id, invoice, 102).unwrap();
+        let order = app.db.get_order(id).unwrap().unwrap();
+        assert!(advance(&app.db, &order, Event::MarkUncertain, 103).unwrap());
+    }
+
+    #[tokio::test]
+    async fn real_purchase_delivers_and_debits_once() {
+        let mock = mock_with(create_ok(), vec![pending(), delivered()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let out = confirm_and_buy(&app, "o1", 1, 101).await.unwrap();
+
+        let order = match out {
+            BuyOutcome::Delivered(o) => o,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(order.status, "DELIVERED");
+        assert_eq!(order.bitrefill_invoice.as_deref(), Some(INVOICE_ID));
+        assert_eq!(status_of(&app, "o1"), "DELIVERED");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+        assert_eq!(mock.count(ROUTE_STATUS), 2, "pending, then delivered");
+
+        // What actually went on the wire: catalog package id, balance + auto_pay, bearer key.
+        let raw = mock.requests(ROUTE_CREATE).remove(0);
+        assert!(
+            raw.to_lowercase().contains("authorization: bearer k"),
+            "{raw}"
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["payment_method"], "balance");
+        assert_eq!(body["auto_pay"], true);
+        assert_eq!(
+            body["products"][0]["package_id"],
+            "reliance-jio-india-bundles<&>₹7.47 Talktime Top-Up"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoice_reported_failed_refunds_the_budget() {
+        let mock = mock_with(create_ok(), vec![failed()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let out = confirm_and_buy(&app, "o1", 1, 101).await.unwrap();
+
+        assert!(matches!(out, BuyOutcome::Failed(_)), "{out:?}");
+        assert_eq!(status_of(&app, "o1"), "FAILED");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000);
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+    }
+
+    #[tokio::test]
+    async fn create_invoice_400_fails_and_refunds_with_no_invoice() {
+        let mock = mock_with((400, r#"{"error":"bad package"}"#.into()), vec![pending()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let out = confirm_and_buy(&app, "o1", 1, 101).await.unwrap();
+
+        assert!(matches!(out, BuyOutcome::Failed(_)), "{out:?}");
+        assert_eq!(status_of(&app, "o1"), "FAILED");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000);
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+        assert_eq!(invoice_of(&app, "o1"), None, "no invoice was created");
+        assert_eq!(mock.count(ROUTE_STATUS), 0, "nothing to poll");
+    }
+
+    #[tokio::test]
+    async fn create_invoice_500_is_uncertain_keeps_the_debit_and_is_never_retried() {
+        let mock = mock_with((500, r#"{"error":"boom"}"#.into()), vec![delivered()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let out = confirm_and_buy(&app, "o1", 1, 101).await.unwrap();
+
+        assert!(matches!(out, BuyOutcome::Uncertain(_)), "{out:?}");
+        assert_eq!(status_of(&app, "o1"), "UNCERTAIN");
+        // Unknown outcome: never auto-refund.
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+
+        // Second tap, well past the 30 s limit, so the order-state guard (not TooSoon) decides.
+        let again = confirm_and_buy(&app, "o1", 1, 1_000).await.unwrap();
+        assert!(matches!(again, BuyOutcome::NotQuoted), "{again:?}");
+        assert_eq!(mock.count(ROUTE_CREATE), 1, "no second POST");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+
+        // The 500 gave us no invoice id, so resolve_uncertain has nothing to poll: the order
+        // stays UNCERTAIN for the operator (startup `recover` alerts on these) even though the
+        // mock would now say delivered.
+        assert_eq!(invoice_of(&app, "o1"), None);
+        assert!(resolve_uncertain(&app).await.unwrap().is_empty());
+        assert_eq!(status_of(&app, "o1"), "UNCERTAIN");
+        assert_eq!(mock.count(ROUTE_STATUS), 0);
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+    }
+
+    /// Real time: the poll window is 15 s (`POLL_FOR`) and `tokio::time::pause` needs tokio's
+    /// `test-util` feature, which Cargo.toml does not enable. Other tests run in parallel, so
+    /// this only adds ~15 s of wall clock. `resolve_uncertain` covers the faster paths.
+    #[tokio::test]
+    async fn invoice_pending_past_poll_window_is_uncertain_then_resolves_delivered() {
+        let mock = mock_with(create_ok(), vec![pending()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let out = confirm_and_buy(&app, "o1", 1, 101).await.unwrap();
+
+        assert!(matches!(out, BuyOutcome::Uncertain(_)), "{out:?}");
+        assert_eq!(status_of(&app, "o1"), "UNCERTAIN");
+        assert_eq!(invoice_of(&app, "o1").as_deref(), Some(INVOICE_ID));
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+        assert!(mock.count(ROUTE_STATUS) >= 10, "polled about once a second");
+
+        // Still pending: one status check, no change.
+        assert!(resolve_uncertain(&app).await.unwrap().is_empty());
+        assert_eq!(status_of(&app, "o1"), "UNCERTAIN");
+
+        // Bitrefill now reports delivered: the next round settles it.
+        mock.set(ROUTE_STATUS, vec![delivered()]);
+        let changed = resolve_uncertain(&app).await.unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(status_of(&app, "o1"), "DELIVERED");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(mock.count(ROUTE_CREATE), 1, "resolving never POSTs");
+    }
+
+    #[tokio::test]
+    async fn resolve_uncertain_settles_delivered_and_refunds_failed() {
+        let mock = MockBitrefill::start(vec![
+            ("GET /invoices/inv-a", vec![delivered()]),
+            ("GET /invoices/inv-b", vec![failed()]),
+        ])
+        .await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        member(&app, 2, 1_000_000);
+        seed_uncertain(&app, "oa", 1, "inv-a");
+        seed_uncertain(&app, "ob", 2, "inv-b");
+        assert_eq!(app.db.available_zat(2).unwrap(), 1_000_000 - total_zat());
+
+        let changed = resolve_uncertain(&app).await.unwrap();
+
+        assert_eq!(changed.len(), 2);
+        assert_eq!(status_of(&app, "oa"), "DELIVERED");
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(status_of(&app, "ob"), "FAILED");
+        assert_eq!(app.db.available_zat(2).unwrap(), 1_000_000, "refunded");
+
+        // Idempotent: nothing is UNCERTAIN any more, balances do not move.
+        assert!(resolve_uncertain(&app).await.unwrap().is_empty());
+        assert_eq!(app.db.available_zat(2).unwrap(), 1_000_000);
+        assert_eq!(mock.count(ROUTE_CREATE), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn double_tap_posts_one_invoice_and_debits_once() {
+        let mock = mock_with(create_ok(), vec![delivered()]).await;
+        let app = app_with_bitrefill(&mock.base);
+        member(&app, 1, 1_000_000);
+        quoted(&app, "o1", 1, 100);
+
+        let (a, b) = tokio::join!(
+            confirm_and_buy(&app, "o1", 1, 101),
+            confirm_and_buy(&app, "o1", 1, 101)
+        );
+
+        let outcomes = [a.unwrap(), b.unwrap()];
+        let bought = outcomes
+            .iter()
+            .filter(|o| matches!(o, BuyOutcome::Delivered(_)))
+            .count();
+        let turned_away = outcomes
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o,
+                    BuyOutcome::NotQuoted | BuyOutcome::Refused(caps::Decision::TooSoon)
+                )
+            })
+            .count();
+        assert_eq!((bought, turned_away), (1, 1), "{outcomes:?}");
+        assert_eq!(mock.count(ROUTE_CREATE), 1);
+        // Two DEBITs would leave 1_000_000 - 2 * total_zat().
+        assert_eq!(app.db.available_zat(1).unwrap(), 1_000_000 - total_zat());
+        assert_eq!(status_of(&app, "o1"), "DELIVERED");
     }
 }

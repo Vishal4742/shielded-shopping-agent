@@ -751,8 +751,8 @@ pub(crate) fn buy_text(outcome: &BuyOutcome, now: i64) -> String {
             "Bitrefill couldn't complete this order. You have not been charged; your budget is restored. Order {}.",
             short_ref(&order.id)
         ),
-        BuyOutcome::Uncertain(_) => MSG_UNCERTAIN.to_owned(),
-        BuyOutcome::DryRun(_) => MSG_DRY_RUN.to_owned(),
+        BuyOutcome::Uncertain(order) => format!("{MSG_UNCERTAIN}\nRef {}", short_ref(&order.id)),
+        BuyOutcome::DryRun(order) => format!("{MSG_DRY_RUN}\nRef {}", short_ref(&order.id)),
         BuyOutcome::Refused(decision) => decision_text(*decision),
         BuyOutcome::Paused => MSG_PAUSED.to_owned(),
         BuyOutcome::NotOwner => MSG_NOT_YOURS.to_owned(),
