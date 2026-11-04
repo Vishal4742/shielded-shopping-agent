@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use teloxide::prelude::*;
 use teloxide::types::{
-    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Message,
-    MessageId,
+    BotCommand, CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    Message, MessageId,
 };
 
 use crate::audit;
@@ -48,9 +48,18 @@ const MSG_REPORT_WORKING: &str = "Building your report from your viewing key alo
 const MSG_ERROR_REPORT: &str =
     "I couldn't build the report right now. Nothing was changed; try again in a minute.";
 const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 to pick a recharge,\nor jio 9876543210 10 (operator, phone number, rupees). /help for more.";
+const MSG_MENU: &str = "What would you like to do?";
+const MSG_RECHARGE: &str = "Send the operator and the phone number, e.g. jio 9876543210, and I'll show the recharges you can pick.\nOr add the amount: jio 9876543210 10";
+const MSG_NO_RECEIPTS: &str =
+    "No recharges yet. Send jio and your number to pick one, e.g. jio 9876543210.";
 const MSG_OPTIONS_UNAVAILABLE: &str = "I couldn't load the recharge list right now. Try again in a minute, or send the amount too, e.g. jio 9876543210 10.";
 /// Telegram shows inline keyboards well up to about this many rows.
 const MAX_OPTIONS: usize = 8;
+/// Receipts per /receipts message; ~400 characters each keeps it under Telegram's 4,096.
+const MAX_RECEIPTS: usize = 8;
+const RECEIPT_DONE_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+/// Orders that bought something real, newest receipt state last.
+const BOUGHT_STATUSES: [&str; 3] = ["DELIVERED", "RECEIPT_SENDING", "RECEIPTED"];
 const MSG_VIEWKEY_HELP: &str = "Read-only: it shows your deposits and receipts, nothing can be spent with it. Import it as a watch-only account in Zingo or zcash-devtool.";
 
 /// Chats already told to DM us, so a busy group is answered once.
@@ -82,6 +91,8 @@ pub async fn run(app: Arc<App>) -> anyhow::Result<()> {
     let bot = Bot::new(app.cfg.telegram_bot_token.clone());
     let http = reqwest::Client::new();
     tokio::spawn(autopay::run_loop(app.clone(), bot.clone()));
+    tokio::spawn(receipt_done_loop(app.clone(), bot.clone()));
+    register_bot_profile(&bot).await;
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(on_message))
         .branch(Update::filter_callback_query().endpoint(on_callback));
@@ -149,12 +160,15 @@ async fn handle_message(
     let tg_id = tg_id_of(from);
     match parse_command(text) {
         Some(("start", arg)) => cmd_start(bot, app, chat, from, arg, now).await,
-        Some(("help", _)) => send(bot, chat, help_text()).await,
+        Some(("help", _)) => send_with_menu(bot, chat, help_text()).await,
+        Some(("menu", _)) => send_with_menu(bot, chat, MSG_MENU.to_owned()).await,
+        Some(("recharge", _)) => send(bot, chat, MSG_RECHARGE.to_owned()).await,
         Some(("balance", _)) => cmd_balance(bot, app, chat, tg_id).await,
         Some(("viewkey", _)) => cmd_viewkey(bot, app, chat, tg_id).await,
         Some(("auto", _)) => cmd_auto(bot, app, chat, tg_id, command_args(text), now).await,
         Some(("rules", _)) => cmd_rules(bot, app, chat, tg_id).await,
         Some(("report", _)) => cmd_report(bot, app, chat, tg_id).await,
+        Some(("receipts", _)) => cmd_receipts(bot, app, chat, tg_id).await,
         Some(("stop", arg)) => cmd_stop(bot, app, chat, tg_id, arg).await,
         Some(_) => send(bot, chat, MSG_HINT.to_owned()).await,
         None => handle_text(bot, app, http, chat, tg_id, text, now).await,
@@ -221,7 +235,7 @@ async fn send_deposit_address(bot: &Bot, chat: ChatId, ua: &str) -> anyhow::Resu
     if let Err(e) = send_qr(bot, chat, ua).await {
         tracing::warn!(error = %redact(&e.to_string(), bot.token()), "deposit QR not sent");
     }
-    Ok(())
+    send_with_menu(bot, chat, MSG_MENU.to_owned()).await
 }
 
 async fn send_qr(bot: &Bot, chat: ChatId, ua: &str) -> anyhow::Result<()> {
@@ -345,7 +359,7 @@ async fn send_options(
         }
     };
     let options = recharge_options(&product);
-    let name = operator_name(operator);
+    let name = operator_label(operator.as_str());
     if options.is_empty() {
         let text = format!(
             "No {name} recharge between ₹{} and ₹{} right now. Try Jio.",
@@ -389,14 +403,6 @@ fn recharge_options(product: &crate::bitrefill::Product) -> Vec<(i64, String)> {
         .collect()
 }
 
-fn operator_name(op: Operator) -> &'static str {
-    match op {
-        Operator::Jio => "Jio",
-        Operator::Airtel => "Airtel",
-        Operator::Vi => "Vi",
-    }
-}
-
 /// `jio_9876543210_10` → (Jio, phone, 10). Re-validated here: callback data comes from the client.
 fn parse_pick(id: &str) -> Option<(Operator, &str, i64)> {
     let mut parts = id.split('_');
@@ -410,6 +416,189 @@ fn parse_pick(id: &str) -> Option<(Operator, &str, i64)> {
         && matches!(phone.as_bytes()[0], b'6'..=b'9');
     let inr: i64 = inr.parse().ok()?;
     (phone_ok && (caps::MIN_INR..=caps::MAX_INR).contains(&inr)).then_some((operator, phone, inr))
+}
+
+/// One finished recharge with everything we know about it: the Done message and `/receipts`.
+fn receipt_text(order: &Order) -> String {
+    let mut lines = vec![
+        format!(
+            "🧾 {} ₹{} recharge · {}",
+            operator_label(&order.operator),
+            order.inr,
+            receipt_status(&order.status)
+        ),
+        format!("Phone: {}", mask_phone(&order.phone)),
+        format!(
+            "When: {} · Ref {}",
+            ist_datetime(order.created_at),
+            short_ref(&order.id)
+        ),
+        format!(
+            "Paid: {} (network fee {})",
+            zec(order.total_zat()),
+            zec(order.fee_zat)
+        ),
+    ];
+    if let Some(invoice) = &order.bitrefill_invoice {
+        lines.push(format!("Bitrefill invoice: {invoice}"));
+    }
+    match &order.receipt_txid {
+        Some(txid) => lines.push(format!("Shielded receipt tx: {txid}")),
+        None => lines.push("Shielded receipt: on its way".to_owned()),
+    }
+    lines.push(format!(
+        "Memo (your /viewkey reads it): SSA·{}·{}·₹{}",
+        order.id, order.operator, order.inr
+    ));
+    lines.join("\n")
+}
+
+fn receipt_status(status: &str) -> &'static str {
+    match status {
+        "RECEIPTED" => "receipt on chain ✓",
+        "RECEIPT_SENDING" => "receipt being sent",
+        _ => "delivered",
+    }
+}
+
+fn ist_datetime(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts + IST_OFFSET_SECS, 0)
+        .map(|t| t.format("%d %b %H:%M IST").to_string())
+        .unwrap_or_default()
+}
+
+/// `/receipts`: every real recharge of this user, newest first, with its full receipt.
+async fn cmd_receipts(bot: &Bot, app: &App, chat: ChatId, tg_id: i64) -> anyhow::Result<()> {
+    let mut orders = Vec::new();
+    for status in BOUGHT_STATUSES {
+        orders.extend(
+            app.db
+                .orders_in_status(status)?
+                .into_iter()
+                .filter(|o| o.tg_id == tg_id && !o.dry_run),
+        );
+    }
+    if orders.is_empty() {
+        return send(bot, chat, MSG_NO_RECEIPTS.to_owned()).await;
+    }
+    orders.sort_by_key(|o| std::cmp::Reverse(o.created_at));
+    let total_inr: i64 = orders.iter().map(|o| o.inr).sum();
+    let shown = orders.len().min(MAX_RECEIPTS);
+    let body = orders[..shown]
+        .iter()
+        .map(receipt_text)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let more = if orders.len() > shown {
+        format!(" (latest {shown} below)")
+    } else {
+        String::new()
+    };
+    let text = format!(
+        "Your recharges: {} · ₹{total_inr} in total{more}\n\n{body}\n\nProof from your viewing key alone: /report",
+        orders.len()
+    );
+    send(bot, chat, text).await
+}
+
+/// Sends the "Done" message with the full receipt once an order's shielded receipt is mined.
+/// ponytail: the watermark lives in memory from boot, so a receipt mined while the bot is down
+/// gets no Done message (it still shows in /receipts); add a notified_at column if that matters.
+async fn receipt_done_loop(app: Arc<App>, bot: Bot) {
+    let mut since = chrono::Utc::now().timestamp();
+    loop {
+        tokio::time::sleep(RECEIPT_DONE_EVERY).await;
+        let orders = match app.db.orders_in_status("RECEIPTED") {
+            Ok(orders) => orders,
+            Err(e) => {
+                tracing::warn!(error = %e, "receipt done query failed");
+                continue;
+            }
+        };
+        for order in orders.iter().filter(|o| o.updated_at > since && !o.dry_run) {
+            let text = format!("✅ Done\n\n{}", receipt_text(order));
+            if let Err(e) = bot.send_message(ChatId(order.tg_id), text).await {
+                tracing::warn!(error = %redact(&e.to_string(), bot.token()), "receipt done message failed");
+            }
+        }
+        since = orders.iter().map(|o| o.updated_at).fold(since, i64::max);
+    }
+}
+
+/// The `/` command list and the profile text shown before /start. Failures only cost polish.
+async fn register_bot_profile(bot: &Bot) {
+    let commands = [
+        ("recharge", "Recharge a phone (pick from a list)"),
+        ("balance", "Your budget and deposit address"),
+        ("receipts", "Every recharge with its receipt"),
+        (
+            "auto",
+            "Recharge on a schedule, e.g. /auto jio 98… 10 weekly",
+        ),
+        ("rules", "Your auto-pay rules"),
+        ("stop", "Stop an auto-pay rule: /stop 1"),
+        ("viewkey", "Your read-only viewing key"),
+        ("report", "Purchases proven from your viewing key"),
+        ("menu", "Show the buttons"),
+        ("help", "How it works and the limits"),
+    ]
+    .map(|(name, about)| BotCommand::new(name, about));
+    let results = [
+        bot.set_my_commands(commands).await.err(),
+        bot.set_my_short_description()
+            .short_description("Phone recharges from a private Zcash budget, inside fixed limits.")
+            .await
+            .err(),
+        bot.set_my_description()
+            .description(
+                "I buy Jio recharges for you from a shielded Zcash testnet budget. \
+                 Limits are fixed in code: ₹10–₹50 per recharge, ₹100 per day. \
+                 Every purchase leaves a private receipt only your viewing key can read.",
+            )
+            .await
+            .err(),
+    ];
+    for e in results.into_iter().flatten() {
+        tracing::warn!(error = %redact(&e.to_string(), bot.token()), "bot profile not updated");
+    }
+}
+
+fn menu_keyboard() -> InlineKeyboardMarkup {
+    let b = |label: &str, id: &str| InlineKeyboardButton::callback(label, format!("menu:{id}"));
+    InlineKeyboardMarkup::new([
+        [b("📱 Recharge", "recharge"), b("💰 Balance", "balance")],
+        [b("🧾 Receipts", "receipts"), b("🔁 Auto-pay", "rules")],
+        [b("🔑 View key", "viewkey"), b("📄 Report", "report")],
+        [b("❓ Help", "help"), b("🔄 Menu", "menu")],
+    ])
+}
+
+async fn send_with_menu(bot: &Bot, chat: ChatId, text: String) -> anyhow::Result<()> {
+    bot.send_message(chat, text)
+        .reply_markup(menu_keyboard())
+        .await?;
+    Ok(())
+}
+
+/// A tap on the button menu runs the same handler as the typed command.
+async fn menu_action(
+    bot: &Bot,
+    app: &App,
+    chat: ChatId,
+    tg_id: i64,
+    item: &str,
+) -> anyhow::Result<()> {
+    match item {
+        "recharge" => send(bot, chat, MSG_RECHARGE.to_owned()).await,
+        "balance" => cmd_balance(bot, app, chat, tg_id).await,
+        "receipts" => cmd_receipts(bot, app, chat, tg_id).await,
+        "rules" => cmd_rules(bot, app, chat, tg_id).await,
+        "viewkey" => cmd_viewkey(bot, app, chat, tg_id).await,
+        "report" => cmd_report(bot, app, chat, tg_id).await,
+        "help" => send_with_menu(bot, chat, help_text()).await,
+        "menu" => send_with_menu(bot, chat, MSG_MENU.to_owned()).await,
+        _ => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------- callbacks
@@ -433,6 +622,7 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     let tg_id = tg_id_of(&q.from);
     let rule_id = || order_id.parse::<i64>().ok();
     match action {
+        Action::Menu => menu_action(bot, app, chat, tg_id, order_id).await?,
         Action::Pick => {
             if let Some((operator, phone, inr)) = parse_pick(order_id) {
                 send_quote(bot, app, chat, tg_id, operator, phone, inr, now).await?;
@@ -698,6 +888,7 @@ fn command_args(text: &str) -> &str {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
+    Menu,
     Pick,
     Buy,
     Cancel,
@@ -710,6 +901,7 @@ enum Action {
 fn parse_callback(data: &str) -> Option<(Action, &str)> {
     let (action, id) = data.split_once(':')?;
     let action = match action {
+        "menu" => Action::Menu,
         "pick" => Action::Pick,
         "buy" => Action::Buy,
         "cancel" => Action::Cancel,
@@ -831,6 +1023,8 @@ fn help_text() -> String {
          I show a price first; nothing is bought until you tap ✅ Buy.\n\n\
          /balance: your budget and deposit address\n\
          /viewkey: your read-only viewing key\n\
+         /receipts: every recharge with its full receipt\n\
+         /menu: buttons for everything below\n\
          /report: your purchases, proven from the viewing key alone\n\n\
          Auto-pay (I buy on schedule, within your limits):\n\
          /auto jio 9876543210 10 weekly\n\
@@ -883,7 +1077,7 @@ fn no_package_text(requested_inr: i64, available_inr: &[i64]) -> String {
 pub(crate) fn buy_text(outcome: &BuyOutcome, now: i64) -> String {
     match outcome {
         BuyOutcome::Delivered(order) => format!(
-            "✅ Top-up successful\n{} ₹{} → {}\n{} · Ref {}\nYour shielded receipt is on its way; only your /viewkey can read it.",
+            "✅ Top-up successful\n{} ₹{} → {}\n{} · Ref {}\nYour shielded receipt is on its way; I'll send the full receipt when it's on chain. /receipts lists them all.",
             operator_label(&order.operator),
             order.inr,
             mask_phone(&order.phone),
@@ -922,6 +1116,28 @@ fn quote_keyboard(order_id: &str) -> InlineKeyboardMarkup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_text_has_every_receipt_field() {
+        let mut o = order();
+        o.status = "RECEIPTED".into();
+        o.bitrefill_invoice = Some("inv-123".into());
+        o.receipt_txid = Some("abcdef0123".into());
+        let t = receipt_text(&o);
+        for want in [
+            "receipt on chain ✓",
+            "Bitrefill invoice: inv-123",
+            "Shielded receipt tx: abcdef0123",
+            "Memo (your /viewkey reads it): SSA·",
+            "Paid: ",
+            "IST · Ref ",
+        ] {
+            assert!(t.contains(want), "missing {want:?} in {t}");
+        }
+        assert!(!t.contains(&o.phone), "full phone must not appear");
+        o.receipt_txid = None;
+        assert!(receipt_text(&o).contains("Shielded receipt: on its way"));
+    }
 
     #[test]
     fn parse_pick_accepts_only_valid_operator_phone_and_amount() {
@@ -1087,6 +1303,10 @@ mod tests {
 
     #[test]
     fn parses_rule_callbacks_and_command_args() {
+        assert_eq!(
+            parse_callback("menu:balance"),
+            Some((Action::Menu, "balance"))
+        );
         assert_eq!(
             parse_callback("pick:jio_9876543210_10"),
             Some((Action::Pick, "jio_9876543210_10"))
