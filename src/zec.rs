@@ -1,9 +1,228 @@
-//! zcash-devtool wrapper (EI-2). This file holds the pure output parsers; the subprocess
-//! runner and wallet lock land once the coordinator defines the shared error types
-//! (notes/coordination.md §8 step 4). Formats were captured from devtool `0b3436b` into
-//! `fixtures/devtool/`.
+//! zcash-devtool wrapper (EI-2): pure output parsers plus [`Zec`], which runs every devtool
+//! call under one wallet mutex. Formats were captured from devtool `0b3436b` into
+//! `fixtures/devtool/`. Never log stdout of `list-accounts` (it carries UFVKs).
 
 use std::fmt;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use tokio::process::Command;
+use tokio::sync::{Mutex, MutexGuard};
+
+const DEVTOOL_TIMEOUT: Duration = Duration::from_secs(180);
+const STDERR_TAIL: usize = 300;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ZecError {
+    #[error("could not start zcash-devtool: {0}")]
+    Spawn(#[from] std::io::Error),
+    #[error("zcash-devtool timed out after {}s", DEVTOOL_TIMEOUT.as_secs())]
+    Timeout,
+    #[error("not enough spendable funds yet")]
+    InsufficientFunds,
+    #[error("zcash-devtool exited with {code:?}: {stderr}")]
+    Failed { code: Option<i32>, stderr: String },
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+}
+
+/// A wallet account as shown by `list-accounts`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Account {
+    pub uuid: String,
+    pub name: String,
+    pub ufvk: String,
+}
+
+impl fmt::Debug for Account {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Account")
+            .field("uuid", &self.uuid)
+            .field("name", &self.name)
+            .field("ufvk", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The one wallet. Every devtool call holds `lock`, so sync, send and account creation never
+/// overlap on the wallet's SQLite files.
+// ponytail: one global wallet lock serialises all users; per-account wallets if throughput matters
+#[derive(Debug)]
+pub struct Zec {
+    bin: PathBuf,
+    wallet_dir: PathBuf,
+    identity: PathBuf,
+    /// `--connection tor` hides our IP and sync pattern from the light-wallet server.
+    use_tor: bool,
+    lock: Mutex<()>,
+}
+
+impl Zec {
+    pub fn new(bin: PathBuf, wallet_dir: PathBuf, identity: PathBuf, use_tor: bool) -> Self {
+        Self {
+            bin,
+            wallet_dir,
+            identity,
+            use_tor,
+            lock: Mutex::new(()),
+        }
+    }
+
+    async fn run(&self, _guard: &MutexGuard<'_, ()>, args: &[&str]) -> Result<String, ZecError> {
+        let mut cmd = Command::new(&self.bin);
+        cmd.arg("wallet")
+            .arg("-w")
+            .arg(&self.wallet_dir)
+            .args(args)
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(DEVTOOL_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| ZecError::Timeout)??;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // ponytail: matched on devtool's error text; switch to exit codes if devtool adds them
+        if stderr.contains("Insufficient") || stderr.contains("insufficient") {
+            return Err(ZecError::InsufficientFunds);
+        }
+        let tail = stderr
+            .trim()
+            .chars()
+            .rev()
+            .take(STDERR_TAIL)
+            .collect::<Vec<_>>();
+        Err(ZecError::Failed {
+            code: out.status.code(),
+            stderr: tail.into_iter().rev().collect(),
+        })
+    }
+
+    fn network_args(&self) -> &'static [&'static str] {
+        if self.use_tor {
+            &["--connection", "tor"]
+        } else {
+            &[]
+        }
+    }
+
+    /// Sync all accounts. Waits for the lock.
+    pub async fn sync(&self) -> Result<(), ZecError> {
+        let guard = self.lock.lock().await;
+        let args: Vec<&str> = ["sync"]
+            .into_iter()
+            .chain(self.network_args().iter().copied())
+            .collect();
+        self.run(&guard, &args).await.map(|_| ())
+    }
+
+    /// Sync worker variant: skip this round (`Ok(false)`) if another call holds the wallet.
+    pub async fn try_sync(&self) -> Result<bool, ZecError> {
+        let Ok(guard) = self.lock.try_lock() else {
+            return Ok(false);
+        };
+        let args: Vec<&str> = ["sync"]
+            .into_iter()
+            .chain(self.network_args().iter().copied())
+            .collect();
+        self.run(&guard, &args).await.map(|_| true)
+    }
+
+    pub async fn balance(&self, account_uuid: &str) -> Result<Balance, ZecError> {
+        let guard = self.lock.lock().await;
+        Ok(parse_balance(
+            &self
+                .run(&guard, &["balance", "--json", account_uuid])
+                .await?,
+        )?)
+    }
+
+    pub async fn list_tx(&self, account_uuid: &str) -> Result<Vec<Tx>, ZecError> {
+        let guard = self.lock.lock().await;
+        Ok(parse_list_tx(
+            &self.run(&guard, &["list-tx", account_uuid]).await?,
+        )?)
+    }
+
+    /// Shielded send with a memo from `from_uuid`. Returns the txid.
+    pub async fn send(
+        &self,
+        from_uuid: &str,
+        to_ua: &str,
+        zat: i64,
+        memo: &str,
+    ) -> Result<String, ZecError> {
+        let guard = self.lock.lock().await;
+        let identity = self.identity.to_string_lossy();
+        let value = zat.to_string();
+        let mut args = vec![
+            "send",
+            "-i",
+            &identity,
+            "--address",
+            to_ua,
+            "--value",
+            &value,
+            "--memo",
+            memo,
+        ];
+        args.extend_from_slice(self.network_args());
+        args.push(from_uuid);
+        Ok(parse_send_txid(&self.run(&guard, &args).await?)?)
+    }
+
+    /// New ZIP-32 account named `name`; returns it with its default unified address.
+    pub async fn create_account(&self, name: &str) -> Result<(Account, String), ZecError> {
+        let guard = self.lock.lock().await;
+        let identity = self.identity.to_string_lossy();
+        let mut args = vec!["generate-account", "-i", &identity, "--name", name];
+        args.extend_from_slice(self.network_args());
+        self.run(&guard, &args).await?;
+        let account = parse_accounts(&self.run(&guard, &["list-accounts"]).await?)
+            .into_iter()
+            .rfind(|a| a.name == name)
+            .ok_or(ParseError::MissingField("new account in list-accounts"))?;
+        let ua =
+            parse_default_address(&self.run(&guard, &["list-addresses", &account.uuid]).await?)?;
+        Ok((account, ua))
+    }
+}
+
+/// `list-accounts`: `Account <uuid> (birthday …)` then indented `Name:`, `UFVK:` lines.
+pub fn parse_accounts(text: &str) -> Vec<Account> {
+    let mut accounts: Vec<Account> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = line.strip_prefix("Account ") {
+            let uuid = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            accounts.push(Account {
+                uuid,
+                name: String::new(),
+                ufvk: String::new(),
+            });
+        } else if let Some(acc) = accounts.last_mut() {
+            if let Some(n) = t.strip_prefix("Name:") {
+                acc.name = n.trim().to_owned();
+            } else if let Some(k) = t.strip_prefix("UFVK:") {
+                acc.ufvk = k.trim().to_owned();
+            }
+        }
+    }
+    accounts
+}
+
+/// `list-addresses <uuid>`: the `Default Address:` line.
+pub fn parse_default_address(text: &str) -> Result<String, ParseError> {
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("Default Address:"))
+        .map(|a| a.trim().to_owned())
+        .filter(|a| a.starts_with('u'))
+        .ok_or(ParseError::MissingField("Default Address"))
+}
 
 const ZAT_PER_ZEC: i64 = 100_000_000;
 const ZEC_DECIMALS: usize = 8;
@@ -224,9 +443,11 @@ mod tests {
             memo_tx.outputs[0].memo.as_deref(),
             Some("SSA·00000000-test-memo·jio·₹10")
         );
-        assert!(memo_tx.outputs[1..]
-            .iter()
-            .all(|o| o.is_change && o.memo.is_none()));
+        assert!(
+            memo_tx.outputs[1..]
+                .iter()
+                .all(|o| o.is_change && o.memo.is_none())
+        );
     }
 
     #[test]
@@ -234,6 +455,37 @@ mod tests {
         let txs = parse_list_tx(LIST_TX_MEMO).unwrap();
         assert_eq!(find_memo_txid(&txs, "00000000-test-memo"), Some(MEMO_TXID));
         assert_eq!(find_memo_txid(&txs, "11111111-other"), None);
+    }
+
+    #[test]
+    fn accounts_parse_names_uuids_and_ufvks_without_leaking_in_debug() {
+        let accts = parse_accounts(include_str!(
+            "../fixtures/devtool/list-accounts-redacted.txt"
+        ));
+        assert_eq!(accts.len(), 2);
+        assert_eq!(accts[1].uuid, "d87ee4a6-ea65-4258-b903-713b7ba04ede");
+        assert_eq!(accts[1].name, "user-test");
+        assert_eq!(accts[1].ufvk, "uviewtest1fakeufvk1");
+        assert!(!format!("{:?}", accts[1]).contains("fakeufvk"));
+    }
+
+    #[test]
+    fn default_address_parses_and_rejects_missing() {
+        let ua =
+            parse_default_address(include_str!("../fixtures/devtool/list-addresses.txt")).unwrap();
+        assert!(ua.starts_with("utest1g7js") && ua.len() > 100);
+        assert!(parse_default_address("Account x\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_binary_is_a_spawn_error() {
+        let zec = Zec::new(
+            "/nonexistent/devtool".into(),
+            "/tmp".into(),
+            "/tmp/id".into(),
+            false,
+        );
+        assert!(matches!(zec.balance("x").await, Err(ZecError::Spawn(_))));
     }
 
     #[test]
