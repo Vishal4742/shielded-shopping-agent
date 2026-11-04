@@ -6,7 +6,7 @@ A Telegram bot, written in Rust, that tops up Indian phones (Jio, Airtel, Vi) fo
 
 Built for the Free Society Hackathon, Mumbai, 4–5 Nov 2026. Entered in both the **Privacy (Zcash)** and **Agentic Commerce (Bitrefill)** tracks. Try it: [@zcashdemo_bot](https://t.me/zcashdemo_bot) (invite only).
 
-**Landing page:** https://shielded-shopping.buildday-qr.workers.dev · **Bot:** [@zcashdemo_bot](https://t.me/zcashdemo_bot) (invite-only)
+**Landing page:** https://shielded-shopping.vercel.app · **Bot:** [@zcashdemo_bot](https://t.me/zcashdemo_bot) (invite-only)
 
 ## How it works
 
