@@ -191,12 +191,22 @@ pub fn mask_phone(phone: &str) -> String {
 }
 
 /// `package_id` is the product slug + `<&>` + the exact package value, as the catalog lists it.
+/// Bitrefill wants E.164. Our orders store 10-digit Indian mobiles; a bare number fails with
+/// HTTP 500 "Number does not match operator's country" (seen live, 4 Nov).
+pub fn e164_india(phone: &str) -> String {
+    if phone.starts_with('+') {
+        phone.to_owned()
+    } else {
+        format!("+91{phone}")
+    }
+}
+
 pub fn invoice_body(product_id: &str, package_value: &str, phone: &str) -> Value {
     json!({
         "products": [{
             "product_id": product_id,
             "package_id": format!("{product_id}<&>{package_value}"),
-            "phone_number": phone,
+            "phone_number": e164_india(phone),
             "quantity": 1,
         }],
         "payment_method": "balance",
@@ -402,6 +412,14 @@ mod tests {
             parse_invoice_status(r#"{"data":{}}"#),
             Err(Error::Decode(_))
         ));
+    }
+
+    #[test]
+    fn invoice_phone_is_e164_for_bare_indian_numbers() {
+        let b = invoice_body("reliance-jio-india-bundles", "10", "6299200082");
+        assert_eq!(b["products"][0]["phone_number"], "+916299200082");
+        let b = invoice_body("reliance-jio-india-bundles", "10", "+916299200082");
+        assert_eq!(b["products"][0]["phone_number"], "+916299200082");
     }
 
     #[test]
