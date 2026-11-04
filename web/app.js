@@ -8,10 +8,11 @@ const clamp01 = (v) => Math.min(1, Math.max(0, v));
 /* ---------- glyph shader ----------
    Downsample the source into one pixel per cell, then draw a Geist Mono glyph per cell:
    strong edges get a stroke along the edge, everything else a density ramp, tinted with the cell's colour. */
-const RAMP = " .:-=+*#%@";
-const EDGE = "|/-\\"; // gradient angle 0, 45, 90, 135 degrees
+const RAMP = " ·:;+=xX%#";
+const EDGE = "│╱─╲"; // box-drawing strokes by gradient angle 0, 45, 90, 135 degrees (geist-mono-blocks covers U+2500-259F)
 const MONO_ADVANCE = 0.6; // Geist Mono advance width per em
-const EDGE_MIN = 0.42, DARK = 0.085, INK = 1.3; // DARK above the floor's glow, so the floor plane doesn't draw a dotted box
+const EDGE_MIN = 0.42, DARK = 0.06, INK = 1.3;
+const FADE = 0.3; // cells dimmer than this fade out, so the floor glow has no hard edge
 
 function makeGlyphRenderer(canvas) {
   const samp = document.createElement("canvas");
@@ -54,7 +55,8 @@ function makeGlyphRenderer(canvas) {
       const glyph = Math.hypot(gx, gy) > EDGE_MIN
         ? EDGE[Math.round(angle / (Math.PI / 4)) % 4]
         : RAMP[Math.min(RAMP.length - 1, Math.floor(l * RAMP.length))];
-      ctx.fillStyle = `rgb(${tint(d[q * 4])},${tint(d[q * 4 + 1])},${tint(d[q * 4 + 2])})`;
+      const alpha = Math.min(1, ((l - DARK) / (FADE - DARK)) ** 2);
+      ctx.fillStyle = `rgb(${tint(d[q * 4])} ${tint(d[q * 4 + 1])} ${tint(d[q * 4 + 2])} / ${alpha.toFixed(2)})`;
       ctx.fillText(glyph, i * cw, j * ch);
       drawn++;
     }
@@ -146,8 +148,8 @@ function startScan(fontsReady) {
 }
 
 /* ---------- chat: scripted loop while on screen ---------- */
-const CHAT_SCRIPT = [ // [ms from start, action]
-  [300, 0], [1300, 1], [2700, "press"], [3100, 2], [4700, 3], [5700, 4],
+const CHAT_SCRIPT = [ // [ms from start, action]: command, rule card, tap Allow, active, heads up, delivered, receipt
+  [300, 0], [1300, 1], [2800, "press"], [3200, 2], [5000, 3], [6800, 4], [7800, 5],
 ];
 const CHAT_HOLD_MS = 3200;
 
@@ -173,9 +175,9 @@ function startChat() {
 
 /* ---------- view as: chain / Bitrefill / you ---------- */
 const VIEW_NOTES = {
-  chain: "The chain sees an encrypted transaction. No phone, no amount, no memo, nothing that points to you.",
-  bitrefill: "Bitrefill sees the phone number and the amount. Not your wallet, your balance or your other purchases.",
-  you: "You see everything. Your viewing key decrypts the memo and links it to your budget.",
+  chain: "On chain this is a shielded transaction: no number, no amount, no memo, and no link back to you.",
+  bitrefill: "Bitrefill gets the number and amount it must deliver. It never sees your Zcash address or your Telegram account.",
+  you: "With your viewing key every field opens, and the memo ties the purchase to your budget.",
 };
 const BLOCKS = "░▒▓█▚▞";
 const SCRAMBLE_MS = 420;
@@ -283,7 +285,7 @@ function startStats() {
     ["#s-delivered", "#s-inr", "#s-receipts"].forEach((s) => { $(s).textContent = "n/a"; });
     $("#s-bar").style.transform = "scaleX(0)";
     pill.hidden = true;
-    cap.textContent = "Live stats offline. The bot runs on a laptop at the venue.";
+    cap.textContent = "No live link to the bot right now. It runs on our laptop at the event.";
   };
   if (!base) { offline(); return; }
 
@@ -318,7 +320,8 @@ function startStats() {
 }
 
 /* ---------- boot ---------- */
-const fontsReady = document.fonts.load('500 10px "Geist Mono"').catch(() => null);
+// canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
+const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
 startHero(fontsReady);
 startScan(fontsReady);
 startChat();

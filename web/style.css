@@ -148,7 +148,7 @@ h3 { font-size: 20px; line-height: 28px; }
 .chat-bar span:last-child { display: flex; flex-direction: column; font-size: 14px; line-height: 20px; }
 .chat-bar small { font-size: 12px; line-height: 16px; color: var(--text-3); }
 .chat-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--black); color: var(--orange); border: 1px solid var(--line); }
-.chat-body { display: flex; flex-direction: column; gap: 8px; padding: 16px; min-height: 360px; }
+.chat-body { display: flex; flex-direction: column; gap: 8px; padding: 16px; min-height: 480px; }
 .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 20px; opacity: 0; transform: translateY(8px); transition: opacity 500ms var(--ease), transform 500ms var(--ease); }
 .msg.on { opacity: 1; transform: none; }
 .msg.me { align-self: flex-end; background: var(--cobalt); color: var(--paper); font-family: var(--mono); }
