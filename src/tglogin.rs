@@ -38,7 +38,9 @@ pub fn verify(query: &str, bot_token: &str, now: i64) -> Option<i64> {
     field("id")?.parse().ok()
 }
 
-#[cfg(test)]
+/// Signs `fields` the way Telegram's widget does. The bot uses it to hand a user a one-hour
+/// website login link in their private chat (`/web`), so the site works without the widget's
+/// phone confirmation.
 pub fn sign(fields: &[(&str, &str)], bot_token: &str) -> String {
     let mut sorted = fields.to_vec();
     sorted.sort();

@@ -51,6 +51,10 @@ const MSG_HINT: &str = "I didn't catch that. Try: jio 9876543210 to pick a recha
 const MSG_SLOW_DOWN: &str = "That's a lot of messages. I'll be back for you in a minute.";
 const MSG_REPORT_COOLDOWN: &str = "You can build one report every 2 minutes. Try again shortly.";
 const MSG_REPORT_BUSY: &str = "Another report is being built right now. Try again in a minute.";
+/// ponytail: one fixed site; make it config if the site moves.
+const WEBSITE: &str = "https://zecshop.vercel.app";
+const MSG_WEB: &str =
+    "Your recharges on the website. This link logs you in for 1 hour; don't share it.";
 const MSG_MENU: &str = "What would you like to do?";
 const MSG_RECHARGE: &str = "Send the operator and the phone number, e.g. jio 9876543210, and I'll show the recharges you can pick.\nOr add the amount: jio 9876543210 10";
 const MSG_NO_RECEIPTS: &str =
@@ -207,6 +211,7 @@ async fn handle_message(
         Some(("rules", _)) => cmd_rules(bot, app, chat, tg_id).await,
         Some(("report", _)) => cmd_report(bot, app, chat, tg_id).await,
         Some(("receipts", _)) => cmd_receipts(bot, app, chat, tg_id).await,
+        Some(("web", _)) => cmd_web(bot, app, chat, from).await,
         Some(("stop", arg)) => cmd_stop(bot, app, chat, tg_id, arg).await,
         Some(_) => send(bot, chat, MSG_HINT.to_owned()).await,
         None => handle_text(bot, app, http, chat, tg_id, text, now).await,
@@ -582,6 +587,7 @@ async fn register_bot_profile(bot: &Bot) {
         ("stop", "Stop an auto-pay rule: /stop 1"),
         ("viewkey", "Your read-only viewing key"),
         ("report", "Purchases proven from your viewing key"),
+        ("web", "See your recharges on the website"),
         ("menu", "Show the buttons"),
         ("help", "How it works and the limits"),
     ]
@@ -612,7 +618,7 @@ fn menu_keyboard() -> InlineKeyboardMarkup {
         [b("📱 Recharge", "recharge"), b("💰 Balance", "balance")],
         [b("🧾 Receipts", "receipts"), b("🔁 Auto-pay", "rules")],
         [b("🔑 View key", "viewkey"), b("📄 Report", "report")],
-        [b("❓ Help", "help"), b("🔄 Menu", "menu")],
+        [b("🌐 Website", "web"), b("❓ Help", "help")],
     ])
 }
 
@@ -628,9 +634,10 @@ async fn menu_action(
     bot: &Bot,
     app: &App,
     chat: ChatId,
-    tg_id: i64,
+    from: &teloxide::types::User,
     item: &str,
 ) -> anyhow::Result<()> {
+    let tg_id = tg_id_of(from);
     match item {
         "recharge" => send(bot, chat, MSG_RECHARGE.to_owned()).await,
         "balance" => cmd_balance(bot, app, chat, tg_id).await,
@@ -640,8 +647,46 @@ async fn menu_action(
         "report" => cmd_report(bot, app, chat, tg_id).await,
         "help" => send_with_menu(bot, chat, help_text()).await,
         "menu" => send_with_menu(bot, chat, MSG_MENU.to_owned()).await,
+        "web" => cmd_web(bot, app, chat, from).await,
         _ => Ok(()),
     }
+}
+
+/// `/web`: a one-hour login link to the website's "My recharges", signed like Telegram's login
+/// widget, sent only in this private chat. It needs no phone confirmation from Telegram.
+async fn cmd_web(
+    bot: &Bot,
+    app: &App,
+    chat: ChatId,
+    from: &teloxide::types::User,
+) -> anyhow::Result<()> {
+    let tg_id = tg_id_of(from);
+    if !app.db.is_user(tg_id)? {
+        return send(bot, chat, MSG_NOT_ALLOWED.to_owned()).await;
+    }
+    let (id, auth_date) = (
+        tg_id.to_string(),
+        chrono::Utc::now().timestamp().to_string(),
+    );
+    let query = crate::tglogin::sign(
+        &[
+            ("id", id.as_str()),
+            ("first_name", from.first_name.as_str()),
+            ("auth_date", auth_date.as_str()),
+        ],
+        &app.cfg.telegram_bot_token,
+    );
+    let Ok(url) = reqwest::Url::parse(&format!("{WEBSITE}/?{query}")) else {
+        return send(bot, chat, MSG_ERROR.to_owned()).await;
+    };
+    bot.send_message(chat, MSG_WEB)
+        .protect_content(true)
+        .reply_markup(InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+            "🌐 Open my recharges",
+            url,
+        )]]))
+        .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- callbacks
@@ -668,7 +713,7 @@ async fn handle_callback(bot: &Bot, q: &CallbackQuery, app: &App) -> anyhow::Res
     }
     let rule_id = || order_id.parse::<i64>().ok();
     match action {
-        Action::Menu => menu_action(bot, app, chat, tg_id, order_id).await?,
+        Action::Menu => menu_action(bot, app, chat, &q.from, order_id).await?,
         Action::Pick => {
             if let Some((operator, phone, inr)) = parse_pick(order_id) {
                 send_quote(bot, app, chat, tg_id, operator, phone, inr, now).await?;
