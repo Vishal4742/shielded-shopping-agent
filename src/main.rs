@@ -1,4 +1,4 @@
-#![allow(dead_code)] // ponytail: modules land in parallel today; remove once main wires them all
+//! Shielded Shopping Agent. `ssa` runs the bot; `ssa invite <CODE> <USES>` adds an invite code.
 
 mod bitrefill;
 mod caps;
@@ -15,4 +15,92 @@ mod workers;
 mod zec;
 mod zip321;
 
-fn main() {}
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+
+const BITREFILL_BASE: &str = "https://api.bitrefill.com/v2";
+const RESOLVE_EVERY: Duration = Duration::from_secs(30);
+
+fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| default.into())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,teloxide=warn,reqwest=warn".into()),
+        )
+        .init();
+
+    let cfg = config::Config::from_env()?;
+    let db_path = PathBuf::from(env_or("SSA_DB", "data/ssa.sqlite"));
+    let db =
+        Arc::new(db::Db::open(&db_path).with_context(|| format!("open {}", db_path.display()))?);
+    db.migrate()?;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [cmd, code, uses] = args.as_slice() {
+        anyhow::ensure!(cmd == "invite", "usage: ssa [invite <CODE> <USES>]");
+        db.add_invite(code, uses.parse().context("USES must be a number")?)?;
+        println!("invite {code} has {uses} uses");
+        return Ok(());
+    }
+    anyhow::ensure!(args.is_empty(), "usage: ssa [invite <CODE> <USES>]");
+
+    let zec = Arc::new(zec::Zec::new(
+        cfg.devtool.clone(),
+        env_or("SSA_WALLET_DIR", "tools/wallets/ssa").into(),
+        env_or("SSA_IDENTITY", "tools/wallets/identity.age").into(),
+        env_or("SSA_TOR", "0") == "1",
+    ));
+    let bitrefill = bitrefill::Bitrefill::new(
+        BITREFILL_BASE,
+        cfg.bitrefill_api_key.clone(),
+        cfg.bitrefill_dry_run,
+    )?;
+    let stats_addr = cfg.stats_addr;
+    tracing::info!(dry_run = cfg.bitrefill_dry_run, "starting ssa");
+    let app = Arc::new(orders::App {
+        cfg,
+        env_path: PathBuf::from(".env"),
+        db,
+        zec,
+        bitrefill,
+        prices: price::PriceCache::new()?,
+    });
+
+    let alerts = orders::recover(&app, chrono::Utc::now().timestamp()).await?;
+    for o in &alerts {
+        tracing::warn!(order_id = %o.id, "order needs operator review after restart");
+    }
+
+    tokio::spawn(workers::sync_loop(app.clone()));
+    tokio::spawn(workers::receipt_loop(app.clone()));
+    if let Some(addr) = stats_addr {
+        tokio::spawn(workers::stats_server(app.clone(), addr));
+    }
+    let resolver = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(RESOLVE_EVERY).await;
+            match orders::resolve_uncertain(&resolver).await {
+                Ok(changed) => {
+                    for o in changed {
+                        tracing::info!(order_id = %o.id, status = %o.status, "uncertain order resolved");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "resolve_uncertain failed"),
+            }
+        }
+    });
+
+    telegram::run(app).await
+}

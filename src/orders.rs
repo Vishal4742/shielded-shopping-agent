@@ -249,7 +249,20 @@ pub async fn confirm_and_buy(
             }
         }
     }
-    purchase(app, reload(&app.db, order_id)?).await
+    // After the DEBIT, an error must never read as "nothing was bought": park it as UNCERTAIN.
+    let order = reload(&app.db, order_id)?;
+    match purchase(app, order.clone()).await {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            tracing::error!(error = %e, order_id, "purchase step failed after debit");
+            let current = reload(&app.db, order_id)?;
+            if current.status == "PURCHASING" {
+                mark_uncertain(app, &current, "internal error after debit")
+            } else {
+                Ok(BuyOutcome::Uncertain(current))
+            }
+        }
+    }
 }
 
 /// Order is PURCHASING with its DEBIT written. Never retries the purchase.
