@@ -112,24 +112,7 @@ h1 em { font: italic 400 1.08em/1 "Instrument Serif", serif; letter-spacing: 0; 
 .facts dt { font-size: 12px; line-height: 16px; color: var(--text-3); }
 .facts dd { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
 
-.art { position: relative; margin: 0; aspect-ratio: 4 / 5; width: 100%; max-width: 520px; justify-self: end; }
-.art canvas, .scan-fig canvas { display: block; width: 100%; height: 100%; }
-.art canvas.diorama { position: absolute; inset: 0; opacity: 0; transition: opacity .9s ease;
-  -webkit-mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); mask-image: radial-gradient(120% 92% at 50% 50%, #000 62%, transparent 100%); }
-.art canvas.diorama.on { opacity: 1; }
-/* plain-word labels over the hero art (positions match the phone sprite and the diorama camera) */
-.tags { list-style: none; margin: 0; padding: 0; position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-.tags[hidden] { display: none; }
-.tags li { position: absolute; padding: 4px 8px; border-radius: 8px; background: rgb(0 0 0 / .8); border: 1px solid var(--line);
-  font: 500 12px/16px var(--mono); color: var(--paper); white-space: nowrap; }
-.tags li::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--orange); vertical-align: 1px; }
-.t-paid { left: 50%; top: 6%; transform: translateX(-50%); }
-.t-receipt { left: 50%; bottom: 8%; transform: translateX(-50%); }
-.t-coins { left: 34%; top: 22%; }
-.t-vault { left: 4%; top: 46%; }
-.t-kiosk { right: 4%; top: 41%; }
-.t-limits { left: 4%; bottom: 14%; }
-.art figcaption { position: absolute; left: 0; right: 0; top: calc(100% + 8px); font-size: 14px; line-height: 20px; color: var(--text-2); text-wrap: balance; }
+.scan-fig canvas { display: block; width: 100%; height: 100%; }
 
 /* corner crop marks: 8 flat segments in one layer */
 .crop { position: relative; }
@@ -173,6 +156,21 @@ h3 { font-size: 20px; line-height: 28px; }
 .msg-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 8px; }
 .tg-btn { text-align: center; padding: 4px 8px; border-radius: 8px; background: rgb(255 255 255 / .06); font-size: 12px; line-height: 16px; transition: background-color 300ms var(--ease), transform 300ms var(--ease); }
 .tg-btn.pressed { background: var(--orange); color: var(--ink); transform: scale(0.98); }
+
+/* hero chat: cream paper, cobalt ink, orange on the tapped button, halftone header */
+.hero-chat { width: 100%; max-width: 480px; justify-self: end; background: var(--paper); border-color: var(--paper); color: var(--ink);
+  box-shadow: 0 0 0 1px rgb(30 63 174 / .5), 0 24px 64px rgb(30 63 174 / .28); }
+.hero-chat .chat-bar { background: var(--cobalt) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Ccircle cx='3' cy='3' r='1.1' fill='%23F4EFE4' fill-opacity='.22'/%3E%3C/svg%3E"); border-bottom: 0; color: var(--paper); }
+.hero-chat .chat-bar small { color: rgb(244 239 228 / .72); }
+.hero-chat .chat-avatar { background: var(--paper); color: var(--orange); border-color: var(--paper); }
+.hero-chat .chat-body { min-height: 0; padding: 16px; gap: 8px; }
+.hero-chat .msg { font-size: 16px; line-height: 24px; }
+.hero-chat .msg.me { font-size: 14px; line-height: 20px; }
+.hero-chat .msg.bot { background: #FBF8F1; border: 1px solid rgb(20 28 63 / .14); color: var(--ink); }
+.hero-chat .msg .small { color: rgb(20 28 63 / .66); }
+.hero-chat .msg.note { color: var(--cobalt); border-color: rgb(30 63 174 / .4); }
+.hero-chat .tg-btn { background: rgb(30 63 174 / .1); color: var(--cobalt); font-weight: 500; }
+.hero-chat .tg-btn.pressed { background: var(--orange); color: var(--ink); }
 
 /* scan */
 .scan-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 64px; align-items: center; }
@@ -352,7 +350,7 @@ details p { padding: 0 0 16px; max-width: 60ch; color: var(--text-2); }
   .links { display: none; }
   .hero { padding-top: 112px; }
   .hero-grid, .demo-grid, .scan-grid, .try-grid, .faq-grid { grid-template-columns: minmax(0, 1fr); gap: 48px; }
-  .art { justify-self: center; max-width: 440px; }
+  .hero-chat { justify-self: stretch; max-width: none; }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .qr { justify-self: start; }
   .wordmark { font-size: 96px; }

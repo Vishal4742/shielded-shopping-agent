@@ -79,75 +79,6 @@ function loadImage(src) {
   return img.decode().then(() => img);
 }
 
-/* ---------- hero: 96 frame turntable from a 12 x 8 sprite sheet ---------- */
-const SPRITE = { cols: 12, rows: 8, w: 200, h: 250, frames: 96, fps: 24 };
-const DEVELOP_MS = 900;
-
-function startHero(fontsReady) {
-  const canvas = $("#hero-canvas"), cap = $("#hero-cap");
-  if (!canvas) return;
-  Promise.all([loadImage("sprite.jpg"), fontsReady]).then(([sprite]) => {
-    const r = makeGlyphRenderer(canvas);
-    const frameAt = (k) => [(k % SPRITE.cols) * SPRITE.w, Math.floor(k / SPRITE.cols) * SPRITE.h];
-    const paint = (k, rowLimit) => { const [sx, sy] = frameAt(k); return r.draw(sprite, sx, sy, SPRITE.w, SPRITE.h, rowLimit); };
-    cap.textContent = "A phone with a paid ₹10 recharge receipt, drawn in text characters";
-
-    if (reduced) {
-      paint(0);
-      addEventListener("resize", () => { r.resize(); paint(0); });
-      return;
-    }
-    let running = false, raf = 0, t0 = performance.now(), lastFrame = -1;
-    const tick = (now) => {
-      const elapsed = now - t0;
-      const k = Math.floor((elapsed / 1000) * SPRITE.fps) % SPRITE.frames;
-      const developing = elapsed < DEVELOP_MS;
-      if (k !== lastFrame || developing) {
-        const p = clamp01(elapsed / DEVELOP_MS), eased = 1 - Math.pow(1 - p, 3);
-        paint(k, developing ? Math.ceil(r.rows * eased) : Infinity);
-        lastFrame = k;
-      }
-      if (running) raf = requestAnimationFrame(tick);
-    };
-    const play = (on) => {
-      on = on && !heroRetired;
-      if (on === running) return;
-      running = on;
-      if (on) raf = requestAnimationFrame(tick); else cancelAnimationFrame(raf);
-    };
-    let inView = true;
-    onVisible(canvas, (v) => { inView = v; play(v && !document.hidden); });
-    document.addEventListener("visibilitychange", () => play(inView && !document.hidden));
-    addEventListener("resize", () => { r.resize(); lastFrame = -1; });
-    retireHero = () => { heroRetired = true; play(false); };
-  }).catch(() => { cap.textContent = "The artwork failed to load. Reload the page to try again."; });
-}
-
-/* ---------- hero upgrade: live 3D ASCII diorama (diorama/diorama.js), loaded after first paint.
-   The sprite hero above stays as the fallback: no WebGL2, narrow screens, reduced motion, or any load error. */
-let heroRetired = false, retireHero = () => { heroRetired = true; };
-function startDiorama() {
-  const fig = $(".art"), old = $("#hero-canvas"), cap = $("#hero-cap");
-  if (!fig || reduced || innerWidth < 640 || !document.createElement("canvas").getContext("webgl2")) return;
-  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
-  const go = () => idle(() => import("./diorama/diorama.js").then((m) => m.start(fig)).then((d) => {
-    d.canvas.className = "diorama";
-    d.canvas.setAttribute("aria-hidden", "true");
-    fig.insertBefore(d.canvas, cap);
-    fig.setAttribute("aria-label", "A Mumbai street corner at dusk drawn in moving text glyphs: coins drift from a shielded vault to an orange-awning recharge kiosk");
-    retireHero();
-    old.style.display = "none";
-    cap.textContent = "Your agent pays the recharge kiosk from a shielded budget, inside fixed limits.";
-    $("#tags-phone").hidden = true; $("#tags-dio").hidden = false;
-    let inView = true;
-    onVisible(fig, (v) => { inView = v; d.play(v && !document.hidden); });
-    document.addEventListener("visibilitychange", () => d.play(inView && !document.hidden));
-    addEventListener("resize", () => { if (innerWidth >= 640) d.resize(); });
-    requestAnimationFrame(() => d.canvas.classList.add("on"));
-  }).catch((e) => console.warn("diorama unavailable, keeping the glyph hero", e)), { timeout: 2000 });
-  if (document.readyState === "complete") go(); else addEventListener("load", go, { once: true });
-}
-
 /* ---------- scan: glyphs resolve into the clear render as the section scrolls past ---------- */
 function startScan(fontsReady) {
   const canvas = $("#scan-canvas"), img = $("#scan-solid"), cap = $("#scan-cap");
@@ -344,8 +275,6 @@ function startStats() {
 /* ---------- boot ---------- */
 // canvas text doesn't trigger unicode-range subsets, so load the block/box subset explicitly
 const fontsReady = document.fonts.load('500 10px "Geist Mono"', `${RAMP}${EDGE}`).catch(() => null);
-startHero(fontsReady);
-startDiorama();
 startScan(fontsReady);
 startChat();
 startViewAs();
