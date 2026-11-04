@@ -338,18 +338,18 @@ function startReport() {
 
   const params = new URLSearchParams(location.search);
   if (!(params.has("hash") && params.has("id"))) { showWidget(); return; }
-  // Came back from Telegram: keep only the signed fields, then clean the address bar.
+  // Came back from Telegram: keep only the signed fields (in memory, never stored), then clean the address bar.
   const q = new URLSearchParams(TG_FIELDS.filter((k) => params.has(k)).map((k) => [k, params.get(k)]));
   const who = params.get("first_name") || "there";
   history.replaceState(null, "", location.pathname + "#report");
   $("#report").scrollIntoView();
   if (!base) { showWidget(); return; }
   say(el("p", "note", "Loading your recharges…"));
-  fetch(`${base}/me?${q}`, { cache: "no-store" })
+  fetch(`${base}/me`, { cache: "no-store", headers: { Authorization: `tg ${q}` } })
     .then((r) => (r.status === 401 ? Promise.reject(new Error("login")) : r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
     .then((me) => render(me, who))
     .catch((e) => {
-      say(el("p", "note", e.message === "login" ? "That login expired. Log in again." : "Couldn't reach the bot right now. Try again in a minute, or send /report in Telegram."));
+      say(el("p", "note", e.message === "login" ? "That login expired (they last an hour). Log in again." : "Couldn't reach the bot right now. Try again in a minute, or send /report in Telegram."));
       showWidget();
     });
 }

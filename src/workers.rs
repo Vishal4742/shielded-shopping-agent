@@ -293,9 +293,13 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
 
 async fn serve_connection(app: Arc<App>, mut stream: TcpStream) -> std::io::Result<()> {
     let request = read_request(&mut stream).await?;
-    if let Some(query) = me_query(&request) {
-        let response = me_response(&app, query, now_ts());
-        return stream.write_all(response.as_bytes()).await;
+    match me_route(&request) {
+        Some(MeRoute::Preflight) => return stream.write_all(PREFLIGHT.as_bytes()).await,
+        Some(MeRoute::Get(login)) => {
+            let response = me_response(&app, login, now_ts());
+            return stream.write_all(response.as_bytes()).await;
+        }
+        None => {}
     }
     let response = build_response(&request, || {
         let (start, end) = ist_day(now_ts());
@@ -308,15 +312,42 @@ const MAX_STATS_CONNECTIONS: usize = 32;
 const REPORT_ORDERS: i64 = 20;
 
 // ---------------------------------------------------------------------------------------------
-// GET /me?<Telegram Login Widget fields>: the signed-in user's own purchases and rules
+// GET /me with `Authorization: tg <Telegram Login Widget fields>`: the signed-in user's own
+// purchases and rules. The login rides in a header, not the URL, so it stays out of tunnel and
+// proxy logs; the custom header makes browsers send a CORS preflight first.
 // ---------------------------------------------------------------------------------------------
 
-/// The query string of `GET /me?...`, or None for any other request.
-fn me_query(request: &str) -> Option<&str> {
-    let mut parts = request.lines().next()?.split_whitespace();
+#[derive(Debug, PartialEq, Eq)]
+enum MeRoute<'a> {
+    Preflight,
+    /// The URL-encoded login fields (empty if the header is missing).
+    Get(&'a str),
+}
+
+const PREFLIGHT: &str = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\n\
+     Access-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Authorization\r\n\
+     Access-Control-Max-Age: 600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+fn me_route(request: &str) -> Option<MeRoute<'_>> {
+    let mut lines = request.lines();
+    let mut parts = lines.next()?.split_whitespace();
     let (method, target) = (parts.next()?, parts.next()?);
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    (method == "GET" && path == "/me").then_some(query)
+    if target.split('?').next() != Some("/me") {
+        return None;
+    }
+    match method {
+        "OPTIONS" => Some(MeRoute::Preflight),
+        "GET" => {
+            let login = lines
+                .take_while(|l| !l.is_empty())
+                .filter_map(|l| l.split_once(':'))
+                .find(|(k, _)| k.trim().eq_ignore_ascii_case("authorization"))
+                .and_then(|(_, v)| v.trim().strip_prefix("tg "))
+                .unwrap_or("");
+            Some(MeRoute::Get(login.trim()))
+        }
+        _ => None,
+    }
 }
 
 fn me_response(app: &App, query: &str, now: i64) -> String {
@@ -469,15 +500,20 @@ mod tests {
     }
 
     #[test]
-    fn me_query_matches_only_get_me() {
+    fn me_route_reads_the_login_from_the_header_only() {
+        let get = "GET /me HTTP/1.1\r\nHost: x\r\nauthorization: tg id=1&hash=ab\r\n\r\n";
+        assert_eq!(me_route(get), Some(MeRoute::Get("id=1&hash=ab")));
+        let in_url = "GET /me?id=1&hash=ab HTTP/1.1\r\n\r\n";
+        assert_eq!(me_route(in_url), Some(MeRoute::Get("")));
+        let in_body = "GET /me HTTP/1.1\r\n\r\nAuthorization: tg id=1\r\n";
+        assert_eq!(me_route(in_body), Some(MeRoute::Get("")));
         assert_eq!(
-            me_query("GET /me?id=1&hash=ab HTTP/1.1\r\n"),
-            Some("id=1&hash=ab")
+            me_route("OPTIONS /me HTTP/1.1\r\n\r\n"),
+            Some(MeRoute::Preflight)
         );
-        assert_eq!(me_query("GET /me HTTP/1.1\r\n"), Some(""));
-        assert_eq!(me_query("POST /me?id=1 HTTP/1.1\r\n"), None);
-        assert_eq!(me_query("GET /stats.json HTTP/1.1\r\n"), None);
-        assert_eq!(me_query("GET /meow HTTP/1.1\r\n"), None);
+        assert_eq!(me_route("POST /me HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(me_route("GET /stats.json HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(me_route("GET /meow HTTP/1.1\r\n\r\n"), None);
     }
 
     #[test]

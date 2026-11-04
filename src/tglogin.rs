@@ -5,8 +5,8 @@
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
-/// A login older than this is refused, so a leaked link stops working.
-pub const MAX_AGE_SECS: i64 = 86_400;
+/// A login older than this is refused, so a leaked login stops working within the hour.
+pub const MAX_AGE_SECS: i64 = 3_600;
 
 /// Returns the Telegram user id when `query` (the widget's fields, URL-encoded) is genuine
 /// and fresh at `now`.
