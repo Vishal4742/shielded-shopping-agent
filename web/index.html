@@ -152,16 +152,31 @@
 
   <section class="how reveal" id="how" aria-labelledby="how-h">
     <div class="wrap">
-      <div class="section-head">
-        <p class="eyebrow mono">How it works</p>
-        <h2 id="how-h">From one rule to a shielded receipt.</h2>
-      </div>
-      <ol class="flow">
-        <li><span class="mono">01</span><h3>Approve a rule</h3><p>/auto with operator, number, amount and how often. Tap Allow once.</p></li>
-        <li><span class="mono">02</span><h3>Heads up</h3><p>A minute before each run you can skip it or stop the rule.</p></li>
-        <li><span class="mono">03</span><h3>Caps in code</h3><p>₹10 to ₹50 a run, ₹100 per person a day, ₹200 a day in total.</p></li>
-        <li><span class="mono">04</span><h3>Bitrefill delivers</h3><p>Paid from a prefunded balance, so it never sees your Zcash address.</p></li>
-        <li><span class="mono">05</span><h3>Shielded receipt</h3><p>An encrypted memo records the order for your viewing key alone.</p></li>
+      <p class="eyebrow mono">How auto-pay works</p>
+      <h2 id="how-h">Approve one rule. <span>Every run after that passes the same checks in code, and you get a minute to skip it.</span></h2>
+      <p class="sr-only" id="how-desc">Flow in order: 1, the rule, approved once. 2, limits per order, per day and bot-wide, plus a 30 second gap. 3, the SSA_PAUSED kill switch. 4, a Bitrefill invoice paid from store credit. 5, delivery of talktime to the phone. 6, a shielded receipt only your viewing key reads. Side branch from the rule: a minute before each run you can skip it or stop the rule.</p>
+      <ol class="graph" aria-describedby="how-desc">
+        <li class="branch"><p class="lbl mono">Branch · before each run</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M4 4v12l7-6zM13 4v12"/></svg></i>
+          <div><h3>⏭ Skip / 🛑 Stop</h3><p>Warned 1 min before each run. If nobody taps, the run goes ahead.</p></div></div></li>
+        <li class="n1"><p class="lbl mono">01 · Rule</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M12 3 8 17M3 15h5"/></svg></i>
+          <div><h3 class="mono">/auto jio … weekly</h3><p>Approved once, by a tap from the person who owns it.</p></div></div></li>
+        <li class="n2"><p class="lbl mono">02 · Limits</p>
+          <div class="node"><i class="ico solid" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3 6h14M3 14h14M7 3v6M13 11v6"/></svg></i>
+          <div><h3>Limits</h3><p class="mono">₹10–50 per order · ₹100/day · ₹200/day bot-wide · 30 s gap</p></div></div></li>
+        <li class="n3"><p class="lbl mono">03 · Kill switch</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 3v7M5.5 6a6 6 0 1 0 9 0"/></svg></i>
+          <div><h3>Kill switch</h3><p class="mono">SSA_PAUSED</p><p>Read before every purchase. Set it and nothing is bought.</p></div></div></li>
+        <li class="n4"><p class="lbl mono">04 · Order</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5 3h10v14l-2.5-2L10 17l-2.5-2L5 17zM8 7h4M8 10h4"/></svg></i>
+          <div><h3>Bitrefill invoice</h3><p>REST v2, paid from store credit.</p></div></div></li>
+        <li class="n5"><p class="lbl mono">05 · Result</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M6 2h8v16H6zM9 15h2"/></svg></i>
+          <div><h3>Delivered</h3><p>Talktime lands on the phone.</p></div></div></li>
+        <li class="n6"><p class="lbl mono">06 · Receipt</p>
+          <div class="node"><i class="ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 2 4 5v5c0 4 3 7 6 8 3-1 6-4 6-8V5zM7.5 10l2 2 3.5-4"/></svg></i>
+          <div><h3>Shielded receipt</h3><p>Memo only your viewing key reads.</p></div></div></li>
       </ol>
     </div>
   </section>
