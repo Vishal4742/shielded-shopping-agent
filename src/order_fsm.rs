@@ -14,20 +14,17 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// `Confirm` happens inside db::confirm_order's single SQL transaction and `RetryReceipt` is a
-// self-loop the receipt queue never needs to write; both stay so the edge table matches design §2.
-#[allow(dead_code)]
+/// `QUOTED → PURCHASING` is written inside `db::confirm_order_checked`'s transaction, and the
+/// receipt queue's retry is a no-op, so neither has an event here.
 pub enum Event {
     Cancel,
     Expire,
-    Confirm,
     Deliver,
     Fail,
     MarkUncertain,
     ResolveDelivered,
     ResolveFailed,
     StartReceipt,
-    RetryReceipt,
     ReceiptMined,
 }
 
@@ -46,14 +43,12 @@ pub fn apply(from: Status, event: Event) -> Result<Status, TransitionError> {
     match (from, event) {
         (S::Quoted, E::Cancel) => Ok(S::Cancelled),
         (S::Quoted, E::Expire) => Ok(S::Expired),
-        (S::Quoted, E::Confirm) => Ok(S::Purchasing),
         (S::Purchasing, E::Deliver) => Ok(S::Delivered),
         (S::Purchasing, E::Fail) => Ok(S::Failed),
         (S::Purchasing, E::MarkUncertain) => Ok(S::Uncertain),
         (S::Uncertain, E::ResolveDelivered) => Ok(S::Delivered),
         (S::Uncertain, E::ResolveFailed) => Ok(S::Failed),
         (S::Delivered, E::StartReceipt) => Ok(S::ReceiptSending),
-        (S::ReceiptSending, E::RetryReceipt) => Ok(S::ReceiptSending),
         (S::ReceiptSending, E::ReceiptMined) => Ok(S::Receipted),
         _ => Err(TransitionError::NotAllowed { from, event }),
     }
@@ -128,32 +123,28 @@ mod tests {
         Expired,
     ];
 
-    const ALL_EVENTS: [Event; 11] = [
+    const ALL_EVENTS: [Event; 9] = [
         Cancel,
         Expire,
-        Confirm,
         Deliver,
         Fail,
         MarkUncertain,
         ResolveDelivered,
         ResolveFailed,
         StartReceipt,
-        RetryReceipt,
         ReceiptMined,
     ];
 
     /// Design §2, exactly: (from, event, to).
-    const EDGES: [(Status, Event, Status); 11] = [
+    const EDGES: [(Status, Event, Status); 9] = [
         (Quoted, Cancel, Cancelled),
         (Quoted, Expire, Expired),
-        (Quoted, Confirm, Purchasing),
         (Purchasing, Deliver, Delivered),
         (Purchasing, Fail, Failed),
         (Purchasing, MarkUncertain, Uncertain),
         (Uncertain, ResolveDelivered, Delivered),
         (Uncertain, ResolveFailed, Failed),
         (Delivered, StartReceipt, ReceiptSending),
-        (ReceiptSending, RetryReceipt, ReceiptSending),
         (ReceiptSending, ReceiptMined, Receipted),
     ];
 
@@ -179,7 +170,7 @@ mod tests {
                 rejected += 1;
             }
         }
-        assert_eq!(rejected, 9 * 11 - EDGES.len());
+        assert_eq!(rejected, 9 * 9 - EDGES.len());
     }
 
     #[test]

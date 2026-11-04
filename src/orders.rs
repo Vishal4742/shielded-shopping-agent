@@ -589,6 +589,7 @@ mod tests {
     // ---- real purchase path (dry_run = false) against a local mock Bitrefill, no network ----
 
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
     const JIO_CATALOG: &str = include_str!("../fixtures/bitrefill/reliance-jio-india-bundles.json");
@@ -679,7 +680,7 @@ mod tests {
     }
 
     /// Reads headers, then `Content-Length` body bytes, so closing never RSTs an unread body.
-    async fn mock_read_request(stream: &TcpStream) -> std::io::Result<String> {
+    async fn mock_read_request(stream: &mut TcpStream) -> std::io::Result<String> {
         let mut buf = Vec::new();
         loop {
             if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -693,32 +694,17 @@ mod tests {
                     break;
                 }
             }
-            stream.readable().await?;
             let mut chunk = [0u8; 4096];
-            match stream.try_read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(e),
+            match stream.read(&mut chunk).await? {
+                0 => break,
+                n => buf.extend_from_slice(&chunk[..n]),
             }
         }
         Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 
-    async fn mock_write_all(stream: &TcpStream, mut bytes: &[u8]) -> std::io::Result<()> {
-        while !bytes.is_empty() {
-            stream.writable().await?;
-            match stream.try_write(bytes) {
-                Ok(n) => bytes = &bytes[n..],
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
-    async fn mock_serve(stream: TcpStream, routes: Routes, seen: Seen) -> std::io::Result<()> {
-        let raw = mock_read_request(&stream).await?;
+    async fn mock_serve(mut stream: TcpStream, routes: Routes, seen: Seen) -> std::io::Result<()> {
+        let raw = mock_read_request(&mut stream).await?;
         let key = raw.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
         seen.lock().unwrap().push((key.clone(), raw));
         let (status, body) = next_canned(&routes, &key);
@@ -727,7 +713,7 @@ mod tests {
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
-        mock_write_all(&stream, response.as_bytes()).await
+        stream.write_all(response.as_bytes()).await
     }
 
     fn app_with_bitrefill(base: &str) -> App {

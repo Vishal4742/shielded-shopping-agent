@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config;
@@ -278,47 +279,32 @@ fn build_response(request: &str, stats: impl FnOnce() -> anyhow::Result<(Stats, 
 /// Reads up to `HTTP_MAX_REQUEST` bytes, stopping at the blank line that ends the headers.
 // ponytail: hand-rolled HTTP for one GET route; switch to axum if routes grow.
 // (`readable`/`try_read` keep us on tokio's `net` feature, no `io-util` needed.)
-async fn read_request(stream: &TcpStream) -> std::io::Result<String> {
+async fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
     let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
     while buf.len() < HTTP_MAX_REQUEST && !buf.windows(4).any(|w| w == b"\r\n\r\n") {
-        stream.readable().await?;
-        let mut chunk = [0u8; 1024];
         let room = (HTTP_MAX_REQUEST - buf.len()).min(chunk.len());
-        match stream.try_read(&mut chunk[..room]) {
-            Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
+        match stream.read(&mut chunk[..room]).await? {
+            0 => break,
+            n => buf.extend_from_slice(&chunk[..n]),
         }
     }
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-async fn write_all(stream: &TcpStream, mut bytes: &[u8]) -> std::io::Result<()> {
-    while !bytes.is_empty() {
-        stream.writable().await?;
-        match stream.try_write(bytes) {
-            Ok(n) => bytes = &bytes[n..],
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-async fn serve_connection(app: Arc<App>, stream: TcpStream) -> std::io::Result<()> {
-    let request = read_request(&stream).await?;
+async fn serve_connection(app: Arc<App>, mut stream: TcpStream) -> std::io::Result<()> {
+    let request = read_request(&mut stream).await?;
     let response = build_response(&request, || {
         let (start, end) = ist_day(now_ts());
         Ok((app.db.stats(start, end)?, config::paused(&app.env_path)))
     });
-    write_all(&stream, response.as_bytes()).await
+    stream.write_all(response.as_bytes()).await
 }
+
+const MAX_STATS_CONNECTIONS: usize = 32;
 
 /// Serves `GET /stats.json` on `addr` until the process exits. A bind failure is logged and ends
 /// only this task.
-const MAX_STATS_CONNECTIONS: usize = 32;
-
 pub async fn stats_server(app: Arc<App>, addr: SocketAddr) {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,

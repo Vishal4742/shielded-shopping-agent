@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-const DEFAULT_NETWORK: &str = "test";
-const DEFAULT_LWD: &str = "https://testnet.zec.rocks:443";
 const DEFAULT_DEVTOOL: &str = "tools/zcash-devtool/target/release/zcash-devtool";
 const DEFAULT_STATS_ADDR: &str = "127.0.0.1:8787";
 const PAUSED_KEY: &str = "SSA_PAUSED";
@@ -16,12 +14,8 @@ pub struct Config {
     pub telegram_bot_token: String,
     pub bitrefill_api_key: String,
     pub anthropic_api_key: String,
-    pub network: String,
-    pub lwd: String,
     pub devtool: PathBuf,
     pub treasury_ua: String,
-    /// Gets operator alerts; `None` when unset.
-    pub operator_tg_id: Option<i64>,
     /// `BITREFILL_DRY_RUN`; defaults to true (safe) when unset.
     pub bitrefill_dry_run: bool,
     /// `None` when `SSA_STATS_ADDR` is set but empty (no stats server).
@@ -34,11 +28,8 @@ impl fmt::Debug for Config {
             .field("telegram_bot_token", &"<redacted>")
             .field("bitrefill_api_key", &"<redacted>")
             .field("anthropic_api_key", &"<redacted>")
-            .field("network", &self.network)
-            .field("lwd", &self.lwd)
             .field("devtool", &self.devtool)
             .field("treasury_ua", &self.treasury_ua)
-            .field("operator_tg_id", &self.operator_tg_id)
             .field("bitrefill_dry_run", &self.bitrefill_dry_run)
             .field("stats_addr", &self.stats_addr)
             .finish()
@@ -64,12 +55,6 @@ impl Config {
         let required = |k: &str| val(k).ok_or_else(|| anyhow!("missing required config key {k}"));
         let or_default = |k: &str, d: &str| val(k).unwrap_or_else(|| d.to_owned());
 
-        let operator_tg_id = val("SSA_OPERATOR_TG_ID")
-            .map(|v| {
-                v.parse::<i64>()
-                    .context("SSA_OPERATOR_TG_ID must be an integer")
-            })
-            .transpose()?;
         let bitrefill_dry_run = match val("BITREFILL_DRY_RUN").as_deref() {
             None | Some("1") => true,
             Some("0") => false,
@@ -90,11 +75,8 @@ impl Config {
             telegram_bot_token: required("TELEGRAM_BOT_TOKEN")?,
             bitrefill_api_key: required("BITREFILL_API_KEY")?,
             anthropic_api_key: required("ANTHROPIC_API_KEY")?,
-            network: or_default("SSA_NETWORK", DEFAULT_NETWORK),
-            lwd: or_default("SSA_LWD", DEFAULT_LWD),
             devtool: PathBuf::from(or_default("SSA_DEVTOOL", DEFAULT_DEVTOOL)),
             treasury_ua: required("SSA_TREASURY_UA")?,
-            operator_tg_id,
             bitrefill_dry_run,
             stats_addr,
         })
@@ -134,11 +116,8 @@ mod tests {
     #[test]
     fn defaults_apply_when_only_required_keys_set() {
         let c = parse(&base()).unwrap();
-        assert_eq!(c.network, "test");
-        assert_eq!(c.lwd, DEFAULT_LWD);
         assert_eq!(c.devtool, PathBuf::from(DEFAULT_DEVTOOL));
         assert!(c.bitrefill_dry_run);
-        assert_eq!(c.operator_tg_id, None);
         assert_eq!(c.stats_addr, Some("127.0.0.1:8787".parse().unwrap()));
     }
 
@@ -181,19 +160,13 @@ mod tests {
     #[test]
     fn optional_keys_parse_and_reject_garbage() {
         let mut m = base();
-        m.insert("SSA_OPERATOR_TG_ID", "42");
         m.insert("BITREFILL_DRY_RUN", "0");
         m.insert("SSA_STATS_ADDR", "");
         let c = parse(&m).unwrap();
-        assert_eq!(c.operator_tg_id, Some(42));
         assert!(!c.bitrefill_dry_run);
         assert_eq!(c.stats_addr, None);
 
-        for (k, v) in [
-            ("SSA_OPERATOR_TG_ID", "abc"),
-            ("BITREFILL_DRY_RUN", "yes"),
-            ("SSA_STATS_ADDR", "nope"),
-        ] {
+        for (k, v) in [("BITREFILL_DRY_RUN", "yes"), ("SSA_STATS_ADDR", "nope")] {
             let mut m = base();
             m.insert(k, v);
             assert!(parse(&m).unwrap_err().to_string().contains(k));

@@ -39,32 +39,18 @@ pub fn parse_usd_cents(json: &str, asset_id: &str) -> Result<i64, PriceError> {
 }
 
 fn decimal_cents(raw: &str) -> Result<i64, PriceError> {
-    if raw.starts_with('-') || raw.starts_with('+') {
+    // Plain decimals only ("1287.77"); 1Click never sends exponents or signs.
+    let (whole, frac) = raw.split_once('.').unwrap_or((raw, ""));
+    let digits_only = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    if whole.is_empty() || !digits_only(whole) || !digits_only(frac) {
         return Err(PriceError::InvalidPrice);
     }
-    let (mantissa, exponent) = raw
-        .split_once(['e', 'E'])
-        .map(|(m, e)| (m, e.parse::<i32>().ok()))
-        .unwrap_or((raw, Some(0)));
-    let exponent = exponent.ok_or(PriceError::InvalidPrice)?;
-    let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    if whole.is_empty()
-        || !whole.bytes().all(|b| b.is_ascii_digit())
-        || !frac.bytes().all(|b| b.is_ascii_digit())
-    {
-        return Err(PriceError::InvalidPrice);
-    }
-    let digits = format!("{whole}{frac}");
-    let n = digits
-        .parse::<i128>()
+    let n: i128 = format!("{whole}{frac}")
+        .parse()
         .map_err(|_| PriceError::InvalidPrice)?;
-    let scale = exponent - frac.len() as i32 + 2;
+    let scale = 2 - frac.len() as i32;
     let cents = if scale >= 0 {
-        n.checked_mul(
-            10_i128
-                .checked_pow(scale as u32)
-                .ok_or(PriceError::InvalidPrice)?,
-        )
+        n.checked_mul(10_i128.pow(scale as u32))
     } else {
         let divisor = 10_i128
             .checked_pow((-scale) as u32)
@@ -139,6 +125,7 @@ mod tests {
     fn rounds_decimal_prices_without_floats() {
         assert_eq!(decimal_cents("1.234").unwrap(), 123);
         assert_eq!(decimal_cents("1.235").unwrap(), 124);
-        assert_eq!(decimal_cents("1.2e2").unwrap(), 12_000);
+        assert!(decimal_cents("1.2e2").is_err());
+        assert!(decimal_cents("-1").is_err());
     }
 }
